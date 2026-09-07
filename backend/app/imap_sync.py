@@ -19,7 +19,7 @@ from .parser import (
     extract_attachments,
     extract_links,
     extract_otps,
-    extract_recipient,
+    extract_recipients,
     extract_snippet,
     extract_text_parts,
     parse_mailbox_received_at,
@@ -172,7 +172,10 @@ class MailSyncService:
                     stored = db.store_message(payload)
                     if stored is not None:
                         synced += 1
-                        changed_aliases.add(stored["recipient_address"])
+                        changed_aliases.update(
+                            payload.get("recipient_addresses")
+                            or [stored["recipient_address"]]
+                        )
 
             finished_at = utc_now_iso()
             self._set_status(last_sync_finished_at=finished_at, last_sync_success_at=finished_at, last_error=None)
@@ -264,9 +267,10 @@ class MailSyncService:
                 self._status[key] = value
 
     def _parse_message(self, uid: int, message: Message, *, fetch_metadata: bytes | str | None = None) -> dict | None:
-        recipient = extract_recipient(message, settings.mail_domain, settings.central_mailbox)
-        if not recipient:
+        recipients = extract_recipients(message, settings.mail_domain, settings.central_mailbox)
+        if not recipients:
             return None
+        recipient = recipients[0]
 
         sender_name = ""
         sender_email = ""
@@ -282,6 +286,7 @@ class MailSyncService:
             "imap_uid": uid,
             "message_id": message.get("Message-Id", ""),
             "recipient_address": recipient,
+            "recipient_addresses": recipients,
             "from_name": sender_name or sender_email or "Unknown Sender",
             "from_email": sender_email,
             "subject": decode_mime_text(message.get("Subject", "(No subject)")) or "(No subject)",

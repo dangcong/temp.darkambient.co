@@ -197,7 +197,7 @@ def extract_attachments(message: Message) -> list[dict[str, Any]]:
     return [strip_attachment_content(attachment) for attachment in _iter_attachment_payloads(message)]
 
 
-def extract_recipient(message: Message, domain: str, central_mailbox: str) -> str | None:
+def extract_recipients(message: Message, domain: str, central_mailbox: str) -> list[str]:
     candidates: list[str] = []
     domain_suffix = f"@{domain.lower()}"
     central_normalized = normalize_address(central_mailbox)
@@ -207,12 +207,16 @@ def extract_recipient(message: Message, domain: str, central_mailbox: str) -> st
         for _display_name, addr in getaddresses(values):
             normalized = normalize_address(addr)
             if normalized.endswith(domain_suffix):
-                candidates.append(normalized)
+                if normalized not in candidates:
+                    candidates.append(normalized)
 
-    for candidate in candidates:
-        if candidate != central_normalized:
-            return candidate
-    return candidates[0] if candidates else None
+    aliases = [candidate for candidate in candidates if candidate != central_normalized]
+    return aliases or candidates
+
+
+def extract_recipient(message: Message, domain: str, central_mailbox: str) -> str | None:
+    recipients = extract_recipients(message, domain, central_mailbox)
+    return recipients[0] if recipients else None
 
 
 def extract_links(text_body: str, html_body: str) -> list[dict[str, str]]:

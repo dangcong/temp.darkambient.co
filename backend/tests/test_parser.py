@@ -6,6 +6,7 @@ from backend.app.parser import (
     extract_links,
     extract_otps,
     extract_recipient,
+    extract_recipients,
     html_to_text,
     prefer_readable_text,
 )
@@ -34,6 +35,24 @@ def test_extract_recipient_from_darkambient_catch_all_header():
         extract_recipient(message, "temp.darkambient.co", "contact@temp.darkambient.co")
         == "launch-742@temp.darkambient.co"
     )
+
+
+def test_extract_recipients_keeps_all_matching_aliases():
+    message = message_from_string(
+        "From: service@example.com\n"
+        "To: first@temp.darkambient.co, outside@example.com\n"
+        "Cc: second@temp.darkambient.co\n"
+        "X-Original-To: first@temp.darkambient.co\n"
+        "Delivered-To: contact@temp.darkambient.co\n"
+        "Subject: Test\n\n"
+        "Body"
+    )
+
+    assert extract_recipients(
+        message,
+        "temp.darkambient.co",
+        "contact@temp.darkambient.co",
+    ) == ["first@temp.darkambient.co", "second@temp.darkambient.co"]
 
 
 def test_extract_links_and_otps():
