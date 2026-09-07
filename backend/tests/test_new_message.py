@@ -182,6 +182,8 @@ def test_admin_ui_exposes_new_message_composer():
     assert 'id="newMessageBtn"' in index_html
     assert 'id="newMessageModal"' in index_html
     assert 'id="newMessageFrom"' in index_html
+    assert 'list="senderAliasOptions"' in index_html
+    assert 'id="senderAliasOptions"' in index_html
     assert 'id="newMessageAttachmentInput"' in index_html
     assert 'id="forwardingTabBtn"' in index_html
     assert 'id="forwardingSearchInput"' in index_html
@@ -189,12 +191,39 @@ def test_admin_ui_exposes_new_message_composer():
     assert 'app.js?v=20260907-mail-capabilities' in index_html
     assert 'style.css?v=20260907-mail-capabilities' in index_html
     assert "function openNewMessageComposer()" in app_js
+    assert "async function loadSenderAliases()" in app_js
+    assert "'/api/mailboxes?status=visible'" in app_js
     assert "function sendNewMessage(event)" in app_js
     assert "serializeAttachmentFiles" in app_js
     assert "data-edit-forwarding-rule" in app_js
     assert "'/api/forwarding-rules'" in app_js
     assert "from_alias: dom.newMessageFrom.value" in app_js
+    assert 'data-compose-field="fromAlias"' in app_js
+    assert "from_alias: draft.fromAlias" in app_js
+    assert "fromAlias: message.recipient_address" in app_js
+    assert "originalAttachmentCount: mode === 'forward'" in app_js
+    assert "baseCount + combined.length > MAX_ATTACHMENT_COUNT" in app_js
+    assert "recipient_address=${encodeURIComponent(rowMessage.recipient_address)}" in app_js
     assert "return 'Mới';" in app_js
+    assert "return 'Tự động';" in app_js
     assert "'/api/messages/send'" in app_js
     assert "LushMail" not in index_html
     assert "LushMail" not in app_js
+
+
+def test_manual_message_route_rejects_automatic_forward_mode(monkeypatch):
+    monkeypatch.setattr(main.db, "get_message", lambda _message_id: {"id": 1})
+    monkeypatch.setattr(
+        main,
+        "send_composed_message",
+        lambda **_kwargs: pytest.fail("SMTP must not be called for an invalid mode"),
+    )
+
+    with pytest.raises(HTTPException) as error:
+        main.send_message(
+            1,
+            {"mode": "auto-forward", "to": "receiver@example.com", "subject": "No"},
+            _session={"role": "admin"},
+        )
+
+    assert error.value.status_code == 400

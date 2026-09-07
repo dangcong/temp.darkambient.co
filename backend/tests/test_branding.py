@@ -55,6 +55,7 @@ def test_active_surfaces_have_no_legacy_alias_or_mojibake():
     active_text = "\n".join(read(name) for name in ("index.html", "user.html", "app.js", "user.js"))
 
     assert "lush@" not in active_text.lower()
+    assert "X?a ?? ch?n" not in active_text
     for broken_sequence in ("Ã", "Ä", "Â", "á»"):
         assert broken_sequence not in active_text
 

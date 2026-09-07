@@ -24,9 +24,22 @@ def _connect() -> sqlite3.Connection:
     return connection
 
 
+def _execute_statements(connection: sqlite3.Connection, script: str) -> None:
+    statement = ""
+    for line in script.splitlines():
+        statement += f"{line}\n"
+        if sqlite3.complete_statement(statement):
+            connection.execute(statement)
+            statement = ""
+    if statement.strip():
+        raise sqlite3.OperationalError("Incomplete SQL migration statement")
+
+
 def init_db() -> None:
     with _connect() as conn:
-        conn.executescript(
+        conn.execute("BEGIN IMMEDIATE")
+        _execute_statements(
+            conn,
             """
             CREATE TABLE IF NOT EXISTS aliases (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -139,12 +152,14 @@ def init_db() -> None:
             """
         )
         _ensure_message_mailbox_namespace(conn)
-        conn.executescript(
+        _execute_statements(
+            conn,
             """
             CREATE TABLE IF NOT EXISTS forwarding_deliveries (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 rule_id INTEGER NOT NULL,
                 message_id INTEGER NOT NULL,
+                source_address TEXT NOT NULL DEFAULT '',
                 status TEXT NOT NULL DEFAULT 'pending',
                 attempt_count INTEGER NOT NULL DEFAULT 0,
                 last_error TEXT,
@@ -194,6 +209,10 @@ def init_db() -> None:
         if "target_address" not in delivery_columns:
             conn.execute(
                 "ALTER TABLE forwarding_deliveries ADD COLUMN target_address TEXT NOT NULL DEFAULT ''"
+            )
+        if "source_address" not in delivery_columns:
+            conn.execute(
+                "ALTER TABLE forwarding_deliveries ADD COLUMN source_address TEXT NOT NULL DEFAULT ''"
             )
         if "target_addresses_json" not in delivery_columns:
             conn.execute(
@@ -309,6 +328,7 @@ def init_db() -> None:
             """
         )
         _backfill_message_recipient_maps(conn)
+        _backfill_forwarding_delivery_sources(conn)
         for alias_row in conn.execute("SELECT id FROM aliases").fetchall():
             _refresh_alias_stats(conn, alias_row["id"])
         conn.execute("UPDATE messages SET mailbox_received_at = COALESCE(mailbox_received_at, received_at) WHERE mailbox_received_at IS NULL")
@@ -342,7 +362,8 @@ def _ensure_message_mailbox_namespace(conn: sqlite3.Connection) -> None:
         return
 
     conn.execute("ALTER TABLE messages RENAME TO messages_uid_migration_old")
-    conn.executescript(
+    _execute_statements(
+        conn,
         """
         CREATE TABLE messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -423,7 +444,8 @@ def _ensure_message_mailbox_namespace(conn: sqlite3.Connection) -> None:
         """
     )
     conn.execute("DROP TABLE messages_uid_migration_old")
-    conn.executescript(
+    _execute_statements(
+        conn,
         """
         CREATE INDEX IF NOT EXISTS idx_messages_recipient_received_at
         ON messages(recipient_address, received_at DESC);
@@ -571,8 +593,6 @@ def row_to_sent_message_summary(row: sqlite3.Row | None) -> dict[str, Any] | Non
     if row is None:
         return None
     subject = decode_mime_text(row["subject"] or "")
-    text_body = row["text_body"] or ""
-    attachments = json.loads(row["attachments_json"] or "[]")
     return {
         "id": row["id"],
         "kind": "sent",
@@ -582,8 +602,8 @@ def row_to_sent_message_summary(row: sqlite3.Row | None) -> dict[str, Any] | Non
         "to": json.loads(row["to_json"] or "[]"),
         "cc": json.loads(row["cc_json"] or "[]"),
         "subject": subject,
-        "snippet": text_body[:240],
-        "attachment_count": len(attachments),
+        "snippet": row["snippet"] or "",
+        "attachment_count": int(row["attachment_count"] or 0),
         "message_id": row["message_id"],
         "sent_at": row["sent_at"],
         "received_at": row["sent_at"],
@@ -690,6 +710,38 @@ def _backfill_forwarding_delivery_targets(conn: sqlite3.Connection) -> None:
                     row["forwarded_at"],
                 ),
             )
+
+
+def _backfill_forwarding_delivery_sources(conn: sqlite3.Connection) -> None:
+    rows = conn.execute(
+        """
+        SELECT deliveries.id, deliveries.message_id, rules.source_address,
+               rules.source_addresses_json
+        FROM forwarding_deliveries AS deliveries
+        JOIN forwarding_rules AS rules ON rules.id = deliveries.rule_id
+        WHERE deliveries.source_address = '' OR deliveries.source_address IS NULL
+        """
+    ).fetchall()
+    for row in rows:
+        sources = _decode_forwarding_addresses(
+            row["source_addresses_json"], row["source_address"]
+        )
+        recipients = conn.execute(
+            "SELECT recipient_address FROM message_recipients WHERE message_id = ? ORDER BY id",
+            (row["message_id"],),
+        ).fetchall()
+        matched_source = next(
+            (
+                recipient["recipient_address"]
+                for recipient in recipients
+                if recipient["recipient_address"] in sources
+            ),
+            sources[0] if sources else "",
+        )
+        conn.execute(
+            "UPDATE forwarding_deliveries SET source_address = ? WHERE id = ?",
+            (matched_source, row["id"]),
+        )
 
 
 def _attachment_metadata(attachment: dict[str, Any], fallback_index: int) -> dict[str, Any]:
@@ -1294,7 +1346,7 @@ def create_forwarding_rule(source_addresses: Any, target_addresses: Any) -> dict
                     existing["source_addresses_json"], existing["source_address"]
                 )
             )
-            if existing_sources.intersection(source_set) and existing["source_address"] != source:
+            if existing_sources.intersection(source_set):
                 raise ValueError("Một alias đã thuộc quy tắc chuyển tiếp khác")
         conn.execute(
             """
@@ -1303,12 +1355,6 @@ def create_forwarding_rule(source_addresses: Any, target_addresses: Any) -> dict
                 enabled, created_at, updated_at
             )
             VALUES (?, ?, ?, ?, 1, ?, ?)
-            ON CONFLICT(source_address) DO UPDATE SET
-                target_address = excluded.target_address,
-                source_addresses_json = excluded.source_addresses_json,
-                target_addresses_json = excluded.target_addresses_json,
-                enabled = 1,
-                updated_at = excluded.updated_at
             """,
             (source, target, json.dumps(sources), json.dumps(targets), now, now),
         )
@@ -1387,6 +1433,16 @@ def update_forwarding_rule(
                 "WHERE rule_id = ? AND status IN ('pending', 'retrying')",
                 (utc_now_iso(), rule_id),
             )
+            conn.execute(
+                """
+                UPDATE forwarding_delivery_targets
+                SET status = 'cancelled', updated_at = ?
+                WHERE delivery_id IN (
+                    SELECT id FROM forwarding_deliveries WHERE rule_id = ?
+                ) AND status IN ('pending', 'retrying')
+                """,
+                (utc_now_iso(), rule_id),
+            )
         row = conn.execute(
             "SELECT * FROM forwarding_rules WHERE id = ?", (rule_id,)
         ).fetchone()
@@ -1411,9 +1467,11 @@ def _enqueue_forwarding_deliveries(
     recipient_addresses: list[str],
 ) -> None:
     now = utc_now_iso()
-    recipients = {
-        normalize_address(address) for address in recipient_addresses if address
-    }
+    recipients = list(
+        dict.fromkeys(
+            normalize_address(address) for address in recipient_addresses if address
+        )
+    )
     rules = conn.execute(
         "SELECT id, source_address, source_addresses_json, target_address, "
         "target_addresses_json FROM forwarding_rules WHERE enabled = 1"
@@ -1422,7 +1480,10 @@ def _enqueue_forwarding_deliveries(
         sources = _decode_forwarding_addresses(
             rule["source_addresses_json"], rule["source_address"]
         )
-        if not recipients.intersection(sources):
+        source_address = next(
+            (recipient for recipient in recipients if recipient in sources), None
+        )
+        if source_address is None:
             continue
         targets = _decode_forwarding_addresses(
             rule["target_addresses_json"], rule["target_address"]
@@ -1433,12 +1494,21 @@ def _enqueue_forwarding_deliveries(
         conn.execute(
             """
             INSERT OR IGNORE INTO forwarding_deliveries(
-                rule_id, message_id, target_address, target_addresses_json,
+                rule_id, message_id, source_address, target_address, target_addresses_json,
                 status, attempt_count, next_attempt_at, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, 'pending', 0, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)
             """,
-            (rule["id"], message_id, target, json.dumps(targets), now, now, now),
+            (
+                rule["id"],
+                message_id,
+                source_address,
+                target,
+                json.dumps(targets),
+                now,
+                now,
+                now,
+            ),
         )
         delivery = conn.execute(
             "SELECT id FROM forwarding_deliveries WHERE rule_id = ? AND message_id = ?",
@@ -1468,7 +1538,7 @@ def list_due_forwarding_deliveries(limit: int = 20) -> list[dict[str, Any]]:
                 delivery_targets.id AS target_delivery_id,
                 deliveries.id AS delivery_id,
                 delivery_targets.attempt_count AS delivery_attempt_count,
-                rules.source_address AS forwarding_source_address,
+                deliveries.source_address AS forwarding_source_address,
                 delivery_targets.target_address AS forwarding_target_address,
                 messages.*
             FROM forwarding_delivery_targets AS delivery_targets
@@ -1477,6 +1547,7 @@ def list_due_forwarding_deliveries(limit: int = 20) -> list[dict[str, Any]]:
             JOIN forwarding_rules AS rules ON rules.id = deliveries.rule_id
             JOIN messages ON messages.id = deliveries.message_id
             WHERE delivery_targets.status IN ('pending', 'retrying')
+              AND deliveries.status IN ('pending', 'retrying')
               AND delivery_targets.next_attempt_at <= ?
               AND rules.enabled = 1
               AND messages.suppressed = 0
@@ -1717,11 +1788,17 @@ def _build_message_scope(
         LEFT JOIN aliases ON aliases.id = messages.alias_id
     """
     if include_recipient_mappings:
-        query += " JOIN message_recipients ON message_recipients.message_id = messages.id"
+        query += """
+            JOIN message_recipients ON message_recipients.message_id = messages.id
+            LEFT JOIN aliases AS mapped_aliases ON mapped_aliases.id = message_recipients.alias_id
+        """
     query += """
         WHERE messages.suppressed = 0
-          AND COALESCE(aliases.status, 'active') != 'deleted'
     """
+    if include_recipient_mappings:
+        query += " AND COALESCE(mapped_aliases.status, 'active') != 'deleted'"
+    else:
+        query += " AND COALESCE(aliases.status, 'active') != 'deleted'"
     values: list[Any] = []
     if alias_id is not None:
         if include_recipient_mappings:
@@ -1790,30 +1867,27 @@ def list_messages(*, alias_id: int | None = None, filter_name: str = "all", sear
     values.append(limit)
     with _connect() as conn:
         rows = conn.execute(query, values).fetchall()
-    items: list[dict[str, Any]] = []
-    seen_keys: set[str] = set()
-    for row in rows:
-        item = row_to_message_summary(row)
-        if item is None:
-            continue
-        key = f"{item.get('message_id') or item['id']}:{item['recipient_address']}"
-        if key in seen_keys:
-            continue
-        seen_keys.add(key)
-        items.append(item)
-    return items
+    return [row_to_message_summary(row) for row in rows]
 
 
 def delete_messages_by_scope(*, alias_id: int | None = None, filter_name: str = "all", search: str = "") -> dict[str, Any]:
-    scope_query, values = _build_message_scope(alias_id=alias_id, filter_name=filter_name, search=search)
-    query = f"SELECT messages.id, messages.alias_id, messages.recipient_address {scope_query}"
+    scope_query, values = _build_message_scope(
+        alias_id=alias_id,
+        filter_name=filter_name,
+        search=search,
+        include_recipient_mappings=True,
+    )
+    query = (
+        "SELECT messages.id, message_recipients.alias_id, "
+        f"message_recipients.recipient_address {scope_query}"
+    )
 
     with _connect() as conn:
         rows = conn.execute(query, values).fetchall()
         if not rows:
             return {"deleted_count": 0, "recipient_addresses": []}
 
-        message_ids = [row["id"] for row in rows]
+        message_ids = sorted({row["id"] for row in rows})
         alias_ids = sorted({row["alias_id"] for row in rows if row["alias_id"] is not None})
         recipient_addresses = sorted({row["recipient_address"] for row in rows if row["recipient_address"]})
         placeholders = ", ".join("?" for _ in message_ids)
@@ -1879,7 +1953,14 @@ def store_sent_message(payload: dict[str, Any]) -> dict[str, Any] | None:
 
 def list_sent_messages(*, search: str = "", limit: int = 200) -> list[dict[str, Any]]:
     scope_query, values = _build_sent_message_scope(search=search)
-    query = f"SELECT * {scope_query} ORDER BY sent_at DESC LIMIT ?"
+    query = f"""
+        SELECT id, source_message_id, mode, from_email, to_json, cc_json,
+               subject, substr(text_body, 1, 240) AS snippet,
+               json_array_length(attachments_json) AS attachment_count,
+               message_id, sent_at, suppressed
+        {scope_query}
+        ORDER BY sent_at DESC LIMIT ?
+    """
     values.append(limit)
     with _connect() as conn:
         rows = conn.execute(query, values).fetchall()
@@ -1921,15 +2002,12 @@ def list_public_messages(*, recipient_address: str) -> list[dict[str, Any]]:
                 CASE WHEN messages.extracted_links_json != '[]' THEN 1 ELSE 0 END AS has_links,
                 CASE WHEN messages.extracted_otps_json != '[]' THEN 1 ELSE 0 END AS has_otps
             FROM messages
-            LEFT JOIN aliases ON aliases.id = messages.alias_id
+            JOIN message_recipients AS recipient_map
+              ON recipient_map.message_id = messages.id
+             AND recipient_map.recipient_address = ?
+            LEFT JOIN aliases AS mapped_alias ON mapped_alias.id = recipient_map.alias_id
             WHERE messages.suppressed = 0
-              AND EXISTS (
-                SELECT 1
-                FROM message_recipients AS recipient_map
-                WHERE recipient_map.message_id = messages.id
-                  AND recipient_map.recipient_address = ?
-              )
-              AND COALESCE(aliases.status, 'active') != 'deleted'
+              AND COALESCE(mapped_alias.status, 'active') != 'deleted'
             ORDER BY messages.received_at DESC
             """,
             (normalized_recipient,),
@@ -2046,18 +2124,15 @@ def get_message_for_address(message_id: int, recipient_address: str) -> dict[str
             """
             SELECT messages.*
             FROM messages
-            LEFT JOIN aliases ON aliases.id = messages.alias_id
+            JOIN message_recipients AS recipient_map
+              ON recipient_map.message_id = messages.id
+             AND recipient_map.recipient_address = ?
+            LEFT JOIN aliases AS mapped_alias ON mapped_alias.id = recipient_map.alias_id
             WHERE messages.id = ?
               AND messages.suppressed = 0
-              AND EXISTS (
-                SELECT 1
-                FROM message_recipients AS recipient_map
-                WHERE recipient_map.message_id = messages.id
-                  AND recipient_map.recipient_address = ?
-              )
-              AND COALESCE(aliases.status, 'active') != 'deleted'
+              AND COALESCE(mapped_alias.status, 'active') != 'deleted'
             """,
-            (message_id, normalized_recipient),
+            (normalized_recipient, message_id),
         ).fetchone()
     message = row_to_message(row)
     if message is not None:

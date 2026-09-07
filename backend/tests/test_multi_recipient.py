@@ -71,6 +71,52 @@ def test_one_message_is_available_for_all_recipient_aliases(monkeypatch, tmp_pat
     }
 
 
+def test_admin_list_keeps_distinct_rows_when_rfc_message_id_is_reused(monkeypatch, tmp_path):
+    _init_temp_db(monkeypatch, tmp_path)
+    first = _message_payload(10)
+    second = _message_payload(11)
+    second["message_id"] = first["message_id"]
+    db.store_message(first)
+    db.store_message(second)
+
+    rows = [
+        item
+        for item in db.list_messages()
+        if item["recipient_address"] == "first@temp.darkambient.co"
+    ]
+
+    assert {item["id"] for item in rows} == {1, 2}
+
+
+def test_recipient_alias_status_is_scoped_to_the_selected_mapping(monkeypatch, tmp_path):
+    _init_temp_db(monkeypatch, tmp_path)
+    stored = db.store_message(_message_payload(12))
+    first_alias = db.get_alias_by_address("first@temp.darkambient.co")
+    second_alias = db.get_alias_by_address("second@temp.darkambient.co")
+
+    db.delete_alias(second_alias["id"])
+    assert db.get_message_for_address(stored["id"], "second@temp.darkambient.co") is None
+    assert db.get_message_for_address(stored["id"], "first@temp.darkambient.co") is not None
+
+    db.reactivate_alias(second_alias["id"])
+    db.delete_alias(first_alias["id"])
+    assert db.list_public_messages(recipient_address="first@temp.darkambient.co") == []
+    assert len(db.list_public_messages(recipient_address="second@temp.darkambient.co")) == 1
+
+
+def test_delete_scope_uses_mapped_alias_and_counts_messages_once(monkeypatch, tmp_path):
+    _init_temp_db(monkeypatch, tmp_path)
+    stored = db.store_message(_message_payload(13))
+    first_alias = db.get_alias_by_address("first@temp.darkambient.co")
+    second_alias = db.get_alias_by_address("second@temp.darkambient.co")
+    db.delete_alias(first_alias["id"])
+
+    result = db.delete_messages_by_scope(alias_id=second_alias["id"])
+
+    assert result["deleted_count"] == 1
+    assert db.get_message(stored["id"])["suppressed"] is True
+
+
 def test_init_db_backfills_recipient_mapping_idempotently(monkeypatch, tmp_path):
     _init_temp_db(monkeypatch, tmp_path)
     stored = db.store_message(_message_payload(2))
@@ -131,6 +177,19 @@ def test_public_routes_authorize_every_mapped_recipient(monkeypatch, tmp_path):
         with pytest.raises(HTTPException) as error:
             route()
         assert error.value.status_code == 404
+
+
+def test_admin_detail_can_preserve_the_selected_recipient_alias(monkeypatch, tmp_path):
+    _init_temp_db(monkeypatch, tmp_path)
+    stored = db.store_message(_message_payload(5))
+
+    detail = main.get_message(
+        stored["id"],
+        recipient_address="second@temp.darkambient.co",
+        _session={"role": "admin"},
+    )
+
+    assert detail["item"]["recipient_address"] == "second@temp.darkambient.co"
 
 
 def test_public_translation_uses_active_recipient_identity(monkeypatch, tmp_path):

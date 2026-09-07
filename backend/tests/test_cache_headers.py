@@ -18,3 +18,10 @@ def test_versioned_static_asset_is_immutable():
 
     assert response.status_code == 200
     assert response.headers["cache-control"] == "public, max-age=31536000, immutable"
+
+
+def test_unversioned_static_asset_must_revalidate():
+    response = client.get("/app.js")
+
+    assert response.status_code == 200
+    assert "no-cache" in response.headers["cache-control"]

@@ -3,6 +3,7 @@ const state = {
   currentFilter: 'all',
   messages: [],
   selectedMessageId: null,
+  selectedRecipientAddress: null,
   selectedMessageIds: [],
   selectionAnchorMessageId: null,
   selectedMessageCache: null,
@@ -23,6 +24,7 @@ const state = {
   forwardingSearch: '',
   editingForwardingRuleId: null,
   newMessageAttachments: [],
+  senderAliases: [],
   detailPaneWidth: null,
 };
 
@@ -88,7 +90,7 @@ function cacheDom() {
     'forwardingEditModal', 'forwardingEditForm', 'forwardingEditSourceInput',
     'forwardingEditTargetInput', 'forwardingEditError', 'closeForwardingEditBtn',
     'cancelForwardingEditBtn', 'saveForwardingEditBtn',
-    'newMessageModal', 'newMessageForm', 'newMessageFrom', 'newMessageTo', 'newMessageCc',
+    'newMessageModal', 'newMessageForm', 'newMessageFrom', 'senderAliasOptions', 'newMessageTo', 'newMessageCc',
     'newMessageSubject', 'newMessageBody', 'newMessageError', 'closeNewMessageBtn',
     'cancelNewMessageBtn', 'sendNewMessageBtn', 'newMessageAttachmentInput',
     'newMessageAttachmentBtn', 'newMessageAttachmentCount', 'newMessageAttachmentList',
@@ -103,7 +105,7 @@ function bindEvents() {
   dom.closeSidebarBtn.addEventListener('click', closeSidebar);
   dom.sidebarOverlay.addEventListener('click', closeSidebar);
   dom.deleteAllBtn.addEventListener('click', () => deleteAllMessagesInScope().catch(handleError));
-  dom.newMessageBtn.addEventListener('click', openNewMessageComposer);
+  dom.newMessageBtn.addEventListener('click', () => openNewMessageComposer().catch(handleError));
   dom.mainSearch.addEventListener('input', onMainSearchChange);
   dom.closeMobileDetailBtn.addEventListener('click', closeMobileDetail);
   dom.usersTabBtn.addEventListener('click', () => setAdminView('users'));
@@ -209,6 +211,7 @@ function isEditableTarget(target) {
 
 function clearSelection() {
   state.selectedMessageId = null;
+  state.selectedRecipientAddress = null;
   state.selectedMessageIds = [];
   state.selectionAnchorMessageId = null;
   state.selectedMessageCache = null;
@@ -274,6 +277,7 @@ async function logout() {
   state.session = null;
   state.messages = [];
   state.selectedMessageId = null;
+  state.selectedRecipientAddress = null;
   state.selectedMessageIds = [];
   state.selectionAnchorMessageId = null;
   state.selectedMessageCache = null;
@@ -583,6 +587,7 @@ function setMailFilter(filterName) {
   state.currentFilter = filterName;
   state.currentPage = 1;
   state.selectedMessageId = null;
+  state.selectedRecipientAddress = null;
   state.selectedMessageIds = [];
   state.selectionAnchorMessageId = null;
   state.selectedMessageCache = null;
@@ -645,6 +650,7 @@ async function loadMessages(options = {}) {
   const previousSignature = state.messageListSignature;
   const previousPage = state.currentPage;
   const previousSelectedMessageId = state.selectedMessageId;
+  const previousSelectedRecipientAddress = state.selectedRecipientAddress;
   const params = getMessageQueryParams();
 
   const endpoint = isSentFolder() ? '/api/sent-messages' : '/api/messages';
@@ -653,8 +659,12 @@ async function loadMessages(options = {}) {
   state.messages = payload.items;
   state.selectedMessageIds = state.selectedMessageIds.filter((id) => state.messages.some((item) => item.id === id));
 
-  if (state.selectedMessageId && !state.messages.some((item) => item.id === state.selectedMessageId)) {
+  if (state.selectedMessageId && !state.messages.some((item) => (
+    item.id === state.selectedMessageId
+    && (isSentMessage(item) || item.recipient_address === state.selectedRecipientAddress)
+  ))) {
     state.selectedMessageId = null;
+    state.selectedRecipientAddress = null;
     state.selectedMessageCache = null;
     state.composeDraft = null;
   }
@@ -668,7 +678,8 @@ async function loadMessages(options = {}) {
   const nextSignature = buildMessageListSignature(state.messages);
   ensureValidPage();
   const pageChanged = state.currentPage !== previousPage;
-  const selectionChanged = state.selectedMessageId !== previousSelectedMessageId;
+  const selectionChanged = state.selectedMessageId !== previousSelectedMessageId
+    || state.selectedRecipientAddress !== previousSelectedRecipientAddress;
   const shouldRenderList = nextSignature !== previousSignature || pageChanged || selectionChanged;
 
   if (shouldRenderList) {
@@ -733,7 +744,7 @@ function renderMessages() {
       return renderSentMessageRow(message);
     }
 
-    const selectedCls = isMessageSelected(message.id) ? 'selected' : '';
+    const selectedCls = isMessageSelected(message.id, message.recipient_address) ? 'selected' : '';
     const unreadCls = message.unread ? 'unread' : '';
     const recentCls = isRecentMessage(message.id) ? 'recent' : '';
     const hasOtp = Boolean(message.has_otps || message.extracted_otps?.length);
@@ -749,7 +760,7 @@ function renderMessages() {
     const starActive = message.important ? 'active' : '';
 
     return `
-      <div class="email-row ${selectedCls} ${unreadCls} ${recentCls} pr-4 pl-10 sm:pr-6 sm:pl-12 py-4 flex items-start gap-3" data-message-id="${message.id}" data-recent-message="${isRecentMessage(message.id) ? 'true' : 'false'}">
+      <div class="email-row ${selectedCls} ${unreadCls} ${recentCls} pr-4 pl-10 sm:pr-6 sm:pl-12 py-4 flex items-start gap-3" data-message-id="${message.id}" data-recipient-address="${escapeAttribute(message.recipient_address)}" data-recent-message="${isRecentMessage(message.id) ? 'true' : 'false'}">
         <label class="row-checkbox" aria-label="Chọn email ${message.id}">
           <input class="row-checkbox-input" type="checkbox" data-select-message="${message.id}" ${selectedCls ? 'checked' : ''}>
           <span class="row-checkbox-box">
@@ -795,7 +806,7 @@ function renderMessages() {
       }
     });
     row.addEventListener('click', async (event) => {
-      await handleMessageRowClick(Number(row.dataset.messageId), event);
+      await handleMessageRowClick(Number(row.dataset.messageId), event, row.dataset.recipientAddress || null);
     });
   });
   dom.emailList.querySelectorAll('[data-delete-message]').forEach((button) => {
@@ -807,7 +818,11 @@ function renderMessages() {
   dom.emailList.querySelectorAll('[data-select-message]').forEach((input) => {
     input.addEventListener('click', async (event) => {
       event.stopPropagation();
-      await toggleMessageSelection(Number(input.dataset.selectMessage));
+      const row = input.closest('[data-message-id]');
+      await toggleMessageSelection(
+        Number(input.dataset.selectMessage),
+        row?.dataset.recipientAddress || null,
+      );
     });
   });
   dom.emailList.querySelectorAll('[data-toggle-important]').forEach((button) => {
@@ -1294,35 +1309,47 @@ async function deleteForwardingRule(ruleId) {
   showToast('Đã xóa quy tắc chuyển tiếp');
 }
 
-async function handleMessageRowClick(messageId, event) {
+async function handleMessageRowClick(messageId, event, recipientAddress = null) {
   if (event.shiftKey) {
     const rangeIds = getRangeSelectionIds(messageId);
     if (rangeIds.length > 1) {
       const anchorId = state.selectionAnchorMessageId && getVisibleMessageIds().includes(state.selectionAnchorMessageId)
         ? state.selectionAnchorMessageId
         : messageId;
-      await openMessage(messageId, { selectionIds: rangeIds, anchorId });
+      await openMessage(messageId, { selectionIds: rangeIds, anchorId, recipientAddress });
       return;
     }
   }
 
   if (event.ctrlKey || event.metaKey) {
-    await toggleMessageSelection(messageId);
+    await toggleMessageSelection(messageId, recipientAddress);
     return;
   }
 
-  await openMessage(messageId);
+  await openMessage(messageId, { recipientAddress });
 }
 
 async function openMessage(messageId, options = {}) {
-  const { selectionIds = [messageId], anchorId = messageId } = options;
+  const {
+    selectionIds = [messageId],
+    anchorId = messageId,
+    recipientAddress = null,
+  } = options;
   try {
-    const rowMessage = state.messages.find((item) => item.id === messageId);
-    const endpoint = isSentMessage(rowMessage) || isSentFolder()
+    const rowMessage = state.messages.find((item) => (
+      item.id === messageId
+      && (!recipientAddress || item.recipient_address === recipientAddress)
+    ));
+    const isSent = isSentMessage(rowMessage) || isSentFolder();
+    const endpointBase = isSent
       ? `/api/sent-messages/${messageId}`
       : `/api/messages/${messageId}`;
+    const endpoint = !isSent && rowMessage?.recipient_address
+      ? `${endpointBase}?recipient_address=${encodeURIComponent(rowMessage.recipient_address)}`
+      : endpointBase;
     const payload = await api(endpoint);
     state.selectedMessageId = messageId;
+    state.selectedRecipientAddress = isSent ? null : payload.item.recipient_address;
     state.selectedMessageIds = normalizeSelectedMessageIds(selectionIds);
     state.selectionAnchorMessageId = anchorId;
     state.selectedMessageCache = payload.item;
@@ -1372,6 +1399,7 @@ async function deleteMessages(messageIds) {
     }
     if (uniqueIds.includes(state.selectedMessageId)) {
       state.selectedMessageId = null;
+      state.selectedRecipientAddress = null;
       state.selectedMessageCache = null;
       state.composeDraft = null;
       resetDetail();
@@ -1383,7 +1411,7 @@ async function deleteMessages(messageIds) {
   }
 }
 
-async function toggleMessageSelection(messageId) {
+async function toggleMessageSelection(messageId, recipientAddress = null) {
   const currentSelection = new Set(getVisibleSelectedMessageIds());
   const willSelect = !currentSelection.has(messageId);
 
@@ -1411,7 +1439,14 @@ async function toggleMessageSelection(messageId) {
     return;
   }
 
-  await openMessage(activeId, { selectionIds: nextIds, anchorId: messageId });
+  const activeRecipientAddress = activeId === messageId
+    ? recipientAddress
+    : state.selectedRecipientAddress;
+  await openMessage(activeId, {
+    selectionIds: nextIds,
+    anchorId: messageId,
+    recipientAddress: activeRecipientAddress,
+  });
 }
 
 async function selectAllVisibleMessages() {
@@ -1477,6 +1512,7 @@ async function deleteAllMessagesInScope() {
   const endpoint = isSentFolder() ? '/api/sent-messages' : '/api/messages';
   const payload = await api(`${endpoint}?${params.toString()}`, { method: 'DELETE' });
   state.selectedMessageId = null;
+  state.selectedRecipientAddress = null;
   state.selectedMessageIds = [];
   state.selectionAnchorMessageId = null;
   state.selectedMessageCache = null;
@@ -1788,6 +1824,10 @@ function renderComposePanel(message) {
       </div>
       <div class="grid gap-3 mt-5">
         <label class="grid gap-1.5">
+          <span class="detail-field-label">Từ</span>
+          <input data-compose-field="fromAlias" type="email" value="${escapeAttribute(draft.fromAlias)}" class="detail-field-input" />
+        </label>
+        <label class="grid gap-1.5">
           <span class="detail-field-label">To</span>
           <input data-compose-field="to" value="${escapeAttribute(draft.to)}" class="detail-field-input" />
         </label>
@@ -1894,6 +1934,7 @@ function bindDetailActions() {
           state.composeDraft.attachments || [],
           Array.from(input.files || []),
           state.composeDraft.originalAttachmentBytes || 0,
+          state.composeDraft.originalAttachmentCount || 0,
         );
         if (state.selectedMessageCache) {
           renderDetail(state.selectedMessageCache);
@@ -1956,6 +1997,7 @@ async function sendCompose() {
     const attachments = await serializeAttachmentFiles(draft.attachments || []);
     const payload = {
       mode: draft.mode,
+      from_alias: draft.fromAlias,
       to: draft.to,
       cc: draft.cc,
       subject: draft.subject,
@@ -1983,7 +2025,17 @@ async function sendCompose() {
   }
 }
 
-function openNewMessageComposer() {
+async function loadSenderAliases() {
+  const payload = await api('/api/mailboxes?status=visible');
+  state.senderAliases = (payload.items || [])
+    .map((item) => String(item.address || '').trim())
+    .filter(Boolean);
+  dom.senderAliasOptions.innerHTML = state.senderAliases
+    .map((address) => `<option value="${escapeAttribute(address)}"></option>`)
+    .join('');
+}
+
+async function openNewMessageComposer() {
   dom.newMessageForm.reset();
   state.newMessageAttachments = [];
   renderNewMessageAttachments();
@@ -1991,6 +2043,14 @@ function openNewMessageComposer() {
   dom.newMessageError.textContent = '';
   dom.newMessageModal.classList.remove('hidden');
   dom.newMessageModal.classList.add('flex');
+  try {
+    await loadSenderAliases();
+  } catch (error) {
+    showToast(error.message || 'Không tải được danh sách alias');
+  }
+  dom.newMessageFrom.value = state.selectedRecipientAddress
+    || state.senderAliases[0]
+    || 'contact@temp.darkambient.co';
   requestAnimationFrame(() => dom.newMessageFrom.focus());
   lucide.createIcons();
 }
@@ -2074,6 +2134,9 @@ function getSentModeLabel(mode) {
   if (mode === 'forward') {
     return 'Forward';
   }
+  if (mode === 'auto-forward') {
+    return 'Tự động';
+  }
   return 'Reply';
 }
 
@@ -2096,6 +2159,7 @@ function buildComposeDraft(message, mode) {
   return {
     messageId: message.id,
     mode,
+    fromAlias: message.recipient_address,
     to: mode === 'reply' ? senderEmail : '',
     cc: '',
     subject: `${subjectPrefix} ${message.subject || '(No subject)'}`.trim(),
@@ -2106,12 +2170,15 @@ function buildComposeDraft(message, mode) {
     originalAttachmentBytes: mode === 'forward'
       ? (message.attachments || []).reduce((total, attachment) => total + Number(attachment.size_bytes || 0), 0)
       : 0,
+    originalAttachmentCount: mode === 'forward'
+      ? (message.attachments || []).length
+      : 0,
   };
 }
 
-function appendAttachmentFiles(existingFiles, nextFiles, baseBytes = 0) {
+function appendAttachmentFiles(existingFiles, nextFiles, baseBytes = 0, baseCount = 0) {
   const combined = [...existingFiles, ...nextFiles];
-  if (combined.length > MAX_ATTACHMENT_COUNT) {
+  if (baseCount + combined.length > MAX_ATTACHMENT_COUNT) {
     throw new Error(`Chỉ được đính kèm tối đa ${MAX_ATTACHMENT_COUNT} tệp`);
   }
   const totalBytes = baseBytes + combined.reduce((total, file) => total + Number(file.size || 0), 0);
@@ -2384,7 +2451,7 @@ function updateBulkToolbar() {
 
   const deleteSelectedLabel = dom.deleteSelectedBtn.querySelector('span');
   if (deleteSelectedLabel) {
-    deleteSelectedLabel.textContent = visibleSelectedCount > 0 ? `X?a ?? ch?n (${visibleSelectedCount})` : 'X?a ?? ch?n';
+    deleteSelectedLabel.textContent = visibleSelectedCount > 0 ? `Xóa đã chọn (${visibleSelectedCount})` : 'Xóa đã chọn';
   }
 
   dom.selectionSummary.textContent = visibleSelectedCount > 0 ? `${visibleSelectedCount} chọn` : `${totalMessages} email`;
@@ -2490,8 +2557,14 @@ function normalizeSelectedMessageIds(ids) {
   return orderedVisibleIds.length ? orderedVisibleIds : uniqueIds;
 }
 
-function isMessageSelected(messageId) {
-  return state.selectedMessageIds.includes(messageId);
+function isMessageSelected(messageId, recipientAddress = null) {
+  if (!state.selectedMessageIds.includes(messageId)) {
+    return false;
+  }
+  if (state.selectedMessageIds.length === 1 && recipientAddress) {
+    return state.selectedRecipientAddress === recipientAddress;
+  }
+  return true;
 }
 
 function getTotalPages() {

@@ -9,6 +9,7 @@
 - `messages.recipient_address` remains the legacy primary recipient.
 - `message_recipients(message_id, recipient_address)` is the canonical many-to-many lookup for every parsed `To`/`Cc` alias.
 - `list_public_messages()` and `get_message_for_address()` must filter through this mapping and return the requested alias as `recipient_address`.
+- Admin rows use `(message.id, recipient_address)` as the display identity; detail requests pass the selected recipient so reply/forward keep the correct sender alias.
 - `init_db()` backfills legacy rows idempotently.
 
 ## Outgoing messages and attachments
@@ -26,10 +27,12 @@
 - A rule only enqueues messages stored after the rule is enabled. Disabling cancels pending/retrying work; deleting cascades delivery history.
 - Internal targets under `@temp.darkambient.co` are rejected to prevent loops.
 - Retry delay doubles from 30 seconds and is capped at one hour.
+- A dedicated forwarding scheduler polls due targets independently from IMAP polling/IDLE, so retries do not wait for another inbound message.
 
 ## Performance and caching
 - Admin inbox/sent list rows use summary serializers and do not load full body or attachment payload content.
 - Versioned static assets receive immutable caching; HTML and API responses remain revalidatable/no-cache as appropriate.
+- Schema creation, additive migration and backfill run in one SQLite transaction; a migration failure rolls back the whole attempt.
 
 ## Verification
 ```powershell

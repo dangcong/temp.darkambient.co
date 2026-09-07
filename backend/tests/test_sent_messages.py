@@ -58,3 +58,31 @@ def test_store_sent_message_keeps_recipients_and_attachment_payload(monkeypatch,
     assert attachment["content_type"] == "application/pdf"
     assert attachment["content"] == b"%PDF-1.4"
 
+
+def test_sent_summary_does_not_read_full_body_or_attachment_json():
+    class SummaryRow(dict):
+        def __getitem__(self, key):
+            if key in {"text_body", "attachments_json"}:
+                raise AssertionError(f"summary accessed heavy column: {key}")
+            return super().__getitem__(key)
+
+    row = SummaryRow(
+        id=1,
+        source_message_id=None,
+        mode="send",
+        from_email="contact@temp.darkambient.co",
+        to_json='["receiver@example.com"]',
+        cc_json="[]",
+        subject="Summary",
+        snippet="Short preview",
+        attachment_count=2,
+        message_id="<summary@example.com>",
+        sent_at="2026-09-07T00:00:00+00:00",
+        suppressed=0,
+    )
+
+    summary = db.row_to_sent_message_summary(row)
+
+    assert summary["snippet"] == "Short preview"
+    assert summary["attachment_count"] == 2
+

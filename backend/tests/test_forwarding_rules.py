@@ -91,7 +91,14 @@ def test_disabling_rule_cancels_pending_delivery_and_delete_cascades(monkeypatch
         status = conn.execute(
             "SELECT status FROM forwarding_deliveries WHERE rule_id = ?", (rule["id"],)
         ).fetchone()["status"]
+        target_status = conn.execute(
+            "SELECT status FROM forwarding_delivery_targets"
+        ).fetchone()["status"]
     assert status == "cancelled"
+    assert target_status == "cancelled"
+
+    db.update_forwarding_rule(rule["id"], enabled=True)
+    assert db.list_due_forwarding_deliveries() == []
 
     deleted = db.delete_forwarding_rule(rule["id"])
     assert deleted["id"] == rule["id"]
@@ -115,6 +122,16 @@ def test_forwarding_api_rejects_internal_destination(monkeypatch):
     assert raised.value.status_code == 400
     assert "tránh vòng lặp" in raised.value.detail
 
+    with pytest.raises(HTTPException) as trailing_dot:
+        main.create_forwarding_rule(
+            {
+                "source_address": "first@temp.darkambient.co",
+                "target_address": "loop@temp.darkambient.co.",
+            },
+            _session={"role": "admin"},
+        )
+    assert trailing_dot.value.status_code == 400
+
 
 def test_source_alias_cannot_belong_to_two_rules(monkeypatch, tmp_path):
     _init_temp_db(monkeypatch, tmp_path)
@@ -124,6 +141,12 @@ def test_source_alias_cannot_belong_to_two_rules(monkeypatch, tmp_path):
         db.create_forwarding_rule(
             ["first@temp.darkambient.co", "second@temp.darkambient.co"],
             "backup@outlook.com",
+        )
+
+    with pytest.raises(ValueError, match="đã thuộc quy tắc"):
+        db.create_forwarding_rule(
+            "first@temp.darkambient.co",
+            "replacement@gmail.com",
         )
 
 
@@ -199,6 +222,58 @@ def test_forwarding_worker_sends_cached_attachments_and_stores_audit(monkeypatch
     assert stored_sent[0]["to"] == ["owner@gmail.com"]
     assert db.list_due_forwarding_deliveries() == []
     assert db.list_forwarding_rules()[0]["last_status"] == "forwarded"
+
+
+def test_forwarding_worker_uses_the_recipient_alias_that_matched_the_rule(monkeypatch, tmp_path):
+    _init_temp_db(monkeypatch, tmp_path)
+    db.create_forwarding_rule(
+        ["first@temp.darkambient.co", "second@temp.darkambient.co"],
+        "owner@gmail.com",
+    )
+    payload = _message_payload(8)
+    payload["recipient_addresses"] = [
+        "unmatched@temp.darkambient.co",
+        "second@temp.darkambient.co",
+    ]
+    payload["recipient_address"] = payload["recipient_addresses"][0]
+    db.store_message(payload)
+    captured = {}
+
+    def fake_send(**kwargs):
+        captured.update(kwargs)
+        return {
+            "mode": "auto-forward",
+            "to": [kwargs["target_address"]],
+            "cc": [],
+            "subject": "Forwarding test",
+            "from": kwargs["source_message"]["recipient_address"],
+            "message_id": "<matched-alias@temp.darkambient.co>",
+        }
+
+    monkeypatch.setattr(imap_sync, "send_automatic_forward", fake_send)
+    monkeypatch.setattr(db, "store_sent_message", lambda item: {"id": 101, **item})
+
+    due = db.list_due_forwarding_deliveries()
+    assert due[0]["source_address"] == "second@temp.darkambient.co"
+
+    imap_sync.MailSyncService()._process_pending_forwards()
+
+    assert captured["source_message"]["recipient_address"] == "second@temp.darkambient.co"
+
+
+def test_forwarding_worker_has_an_independent_scheduler(monkeypatch):
+    service = imap_sync.MailSyncService()
+    calls = []
+
+    def process_once():
+        calls.append(True)
+        service._stop_event.set()
+
+    monkeypatch.setattr(service, "_process_pending_forwards", process_once)
+
+    service._forward_loop()
+
+    assert calls == [True]
 
 
 def test_forwarding_targets_retry_independently(monkeypatch, tmp_path):

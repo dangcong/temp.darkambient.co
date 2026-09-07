@@ -59,6 +59,7 @@ class IdleUnavailableError(RuntimeError):
 class MailSyncService:
     def __init__(self) -> None:
         self._thread: threading.Thread | None = None
+        self._forward_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._sync_lock = threading.Lock()
         self._idle_disabled = False
@@ -91,13 +92,30 @@ class MailSyncService:
         self._stop_event.clear()
         self._set_status(mode="starting", idle_active=False, last_error=None)
         self._thread = threading.Thread(target=self._loop, name="mail-sync", daemon=True)
+        self._forward_thread = threading.Thread(
+            target=self._forward_loop,
+            name="mail-forward",
+            daemon=True,
+        )
         self._thread.start()
+        self._forward_thread.start()
 
     def stop(self) -> None:
         self._stop_event.set()
         if self._thread:
             self._thread.join(timeout=2)
+        if self._forward_thread:
+            self._forward_thread.join(timeout=2)
         self._set_status(mode="stopped", idle_active=False)
+
+    def _forward_loop(self) -> None:
+        interval = max(1, min(int(settings.sync_interval_s), 30))
+        while not self._stop_event.is_set():
+            try:
+                self._process_pending_forwards()
+            except Exception as exc:
+                logger.exception("Forwarding queue processing failed: %s", exc)
+            self._stop_event.wait(interval)
 
     def _loop(self) -> None:
         should_force_initial_sync = True
@@ -155,7 +173,6 @@ class MailSyncService:
                 search_criteria = "ALL" if last_uid == 0 else f"UID {last_uid + 1}:*"
                 status, data = client.uid("search", None, search_criteria)
                 if status != "OK" or not data or not data[0]:
-                    self._process_pending_forwards()
                     self._set_status(last_sync_finished_at=utc_now_iso())
                     return 0
 
@@ -179,7 +196,6 @@ class MailSyncService:
                             or [stored["recipient_address"]]
                         )
 
-            self._process_pending_forwards()
             finished_at = utc_now_iso()
             self._set_status(last_sync_finished_at=finished_at, last_sync_success_at=finished_at, last_error=None)
             if changed_aliases:
@@ -188,7 +204,10 @@ class MailSyncService:
 
     def _process_pending_forwards(self) -> None:
         for delivery in db.list_due_forwarding_deliveries(limit=20):
-            message = delivery["message"]
+            message = {
+                **delivery["message"],
+                "recipient_address": delivery["source_address"],
+            }
             try:
                 attachments = db.list_message_attachment_payloads(message["id"])
                 result = send_automatic_forward(

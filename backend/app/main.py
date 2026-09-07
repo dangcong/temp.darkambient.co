@@ -91,9 +91,12 @@ def _normalize_forward_targets(value: Any) -> list[str]:
             local_part, domain = split_address(target)
         except ValueError as error:
             raise ValueError("Email nhận chuyển tiếp không hợp lệ") from error
+        domain = domain.lower().rstrip(".")
+        target = f"{local_part}@{domain}"
         if not is_valid_local_part(local_part) or not domain or "." not in domain:
             raise ValueError("Email nhận chuyển tiếp không hợp lệ")
-        if domain == settings.mail_domain:
+        internal_domain = settings.mail_domain.lower().rstrip(".")
+        if domain == internal_domain or domain.endswith(f".{internal_domain}"):
             raise ValueError(
                 f"Email nhận chuyển tiếp phải nằm ngoài @{settings.mail_domain} để tránh vòng lặp"
             )
@@ -248,7 +251,10 @@ async def add_cache_headers(request: Request, call_next):
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
     elif path in {"/app.js", "/user.js", "/style.css", "/user.css", "/logo.svg"}:
-        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        if request.query_params.get("v"):
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        else:
+            response.headers["Cache-Control"] = "no-cache, must-revalidate, max-age=0"
     return response
 
 
@@ -631,12 +637,31 @@ def delete_sent_messages_in_scope(
 
 
 @app.get("/api/messages/{message_id}")
-def get_message(message_id: int, _session=Depends(require_admin)) -> dict[str, Any]:
-    message = db.get_message(message_id)
+def get_message(
+    message_id: int,
+    recipient_address: str | None = Query(default=None),
+    _session=Depends(require_admin),
+) -> dict[str, Any]:
+    if recipient_address:
+        try:
+            active_recipient = normalize_lookup_address(
+                recipient_address, settings.mail_domain
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        message = db.get_message_for_address(message_id, active_recipient)
+    else:
+        active_recipient = None
+        message = db.get_message(message_id)
     if message is None:
         raise HTTPException(status_code=404, detail="Email không tồn tại")
     db.mark_message_read(message_id)
-    return {"item": db.get_message(message_id)}
+    refreshed = (
+        db.get_message_for_address(message_id, active_recipient)
+        if active_recipient
+        else db.get_message(message_id)
+    )
+    return {"item": refreshed}
 
 
 @app.get("/api/sent-messages/{sent_message_id}")
@@ -724,6 +749,8 @@ def send_message(message_id: int, payload: dict[str, Any] = Body(...), _session=
     if message is None:
         raise HTTPException(status_code=404, detail="Email không tồn tại")
     mode = (payload.get("mode") or "reply").strip().lower()
+    if mode not in {"reply", "forward"}:
+        raise HTTPException(status_code=400, detail="Chế độ gửi mail không hợp lệ")
     original_attachments = _resolve_message_attachments(message) if mode == "forward" else []
 
     try:

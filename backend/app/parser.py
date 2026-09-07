@@ -211,7 +211,7 @@ def extract_recipients(message: Message, domain: str, central_mailbox: str) -> l
                     candidates.append(normalized)
 
     aliases = [candidate for candidate in candidates if candidate != central_normalized]
-    return aliases or candidates
+    return aliases
 
 
 def extract_recipient(message: Message, domain: str, central_mailbox: str) -> str | None:

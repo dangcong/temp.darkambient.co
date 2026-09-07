@@ -55,6 +55,21 @@ def test_extract_recipients_keeps_all_matching_aliases():
     ) == ["first@temp.darkambient.co", "second@temp.darkambient.co"]
 
 
+def test_extract_recipients_does_not_ingest_the_central_catchall_mailbox():
+    message = message_from_string(
+        "From: service@example.com\n"
+        "To: contact@temp.darkambient.co\n"
+        "Subject: Catchall only\n\n"
+        "Body"
+    )
+
+    assert extract_recipients(
+        message,
+        "temp.darkambient.co",
+        "contact@temp.darkambient.co",
+    ) == []
+
+
 def test_extract_links_and_otps():
     text = "Ma xac nhan cua ban la 847291. Xac minh tai https://service.example/verify?token=abc"
     links = extract_links(text, "")
