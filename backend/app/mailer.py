@@ -6,6 +6,11 @@ from email.utils import formataddr, formatdate, getaddresses, make_msgid
 from typing import Any
 
 from .config import settings
+from .utils import normalize_lookup_address
+
+
+MAX_ATTACHMENT_COUNT = 10
+MAX_ATTACHMENT_TOTAL_BYTES = 18 * 1024 * 1024
 
 
 def parse_address_list(value: str) -> list[str]:
@@ -17,16 +22,39 @@ def parse_address_list(value: str) -> list[str]:
     return addresses
 
 
+def validate_outgoing_attachments(attachments: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    outgoing = attachments or []
+    if len(outgoing) > MAX_ATTACHMENT_COUNT:
+        raise ValueError(f"Chỉ được đính kèm tối đa {MAX_ATTACHMENT_COUNT} tệp")
+
+    total_size = 0
+    for attachment in outgoing:
+        content = attachment.get("content")
+        if content is None:
+            raise ValueError("Không đọc được nội dung tệp đính kèm")
+        total_size += len(bytes(content))
+    if total_size > MAX_ATTACHMENT_TOTAL_BYTES:
+        raise ValueError("Tổng dung lượng tệp đính kèm không được vượt quá 18 MB")
+    return outgoing
+
+
 def send_composed_message(
     *,
     source_message: dict[str, Any],
     mode: str,
+    from_value: str | None = None,
     to_value: str,
     cc_value: str,
     subject: str,
     body: str,
     attachments: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    from_address = (
+        normalize_lookup_address(from_value, settings.mail_domain)
+        if from_value is not None
+        else settings.smtp_from_address
+    )
+    envelope_from_address = settings.smtp_from_address
     to_addresses = parse_address_list(to_value)
     cc_addresses = parse_address_list(cc_value)
     recipients = to_addresses + cc_addresses
@@ -41,7 +69,9 @@ def send_composed_message(
         raise ValueError("SMTP_SECURITY không hợp lệ")
 
     message = EmailMessage()
-    message["From"] = formataddr((settings.smtp_from_name, settings.smtp_from_address))
+    message["From"] = formataddr((settings.smtp_from_name, from_address))
+    if from_address != envelope_from_address:
+        message["Reply-To"] = from_address
     message["To"] = ", ".join(to_addresses)
     if cc_addresses:
         message["Cc"] = ", ".join(cc_addresses)
@@ -56,7 +86,7 @@ def send_composed_message(
         message["References"] = original_message_id
 
     message.set_content(body)
-    outgoing_attachments = attachments or []
+    outgoing_attachments = validate_outgoing_attachments(attachments)
     for attachment in outgoing_attachments:
         content = attachment.get("content")
         if content is None:
@@ -85,7 +115,7 @@ def send_composed_message(
             client.ehlo()
         if settings.smtp_username and settings.smtp_password:
             client.login(settings.smtp_username, settings.smtp_password)
-        client.send_message(message, from_addr=settings.smtp_from_address, to_addrs=recipients)
+        client.send_message(message, from_addr=envelope_from_address, to_addrs=recipients)
     finally:
         try:
             client.quit()
@@ -97,7 +127,7 @@ def send_composed_message(
         "to": to_addresses,
         "cc": cc_addresses,
         "subject": subject.strip(),
-        "from": settings.smtp_from_address,
+        "from": from_address,
         "message_id": message["Message-Id"],
         "attachment_count": len(outgoing_attachments),
     }

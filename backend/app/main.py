@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import json
 import logging
 import sqlite3
@@ -18,13 +20,51 @@ from .auth import clear_session, create_session, require_admin, require_session,
 from .config import settings
 from .events import inbox_events
 from .imap_sync import MailSyncService, fetch_message_attachment_payloads
-from .mailer import send_composed_message
+from .mailer import (
+    MAX_ATTACHMENT_TOTAL_BYTES,
+    send_composed_message,
+    validate_outgoing_attachments,
+)
 from .translator import DEFAULT_TARGET_LANGUAGE, translate_message
 from .utils import iso_in_hours, is_valid_local_part, normalize_address, normalize_lookup_address, random_local_part
 
 
 mail_sync = MailSyncService()
 logger = logging.getLogger("lush_temp_mail.api")
+
+
+def _decode_outgoing_attachments(value: Any) -> list[dict[str, Any]]:
+    if value in (None, ""):
+        return []
+    if not isinstance(value, list):
+        raise ValueError("Danh sách tệp đính kèm không hợp lệ")
+
+    decoded: list[dict[str, Any]] = []
+    for index, item in enumerate(value):
+        if not isinstance(item, dict):
+            raise ValueError("Tệp đính kèm không hợp lệ")
+        filename = str(item.get("filename") or f"attachment-{index + 1}")
+        filename = filename.replace("\\", "/").split("/")[-1].replace("\r", "").replace("\n", "")[:255]
+        encoded = str(item.get("content_base64") or "")
+        if not encoded or len(encoded) > (MAX_ATTACHMENT_TOTAL_BYTES * 2):
+            raise ValueError("Nội dung tệp đính kèm không hợp lệ")
+        try:
+            content = base64.b64decode(encoded, validate=True)
+        except (ValueError, binascii.Error) as error:
+            raise ValueError(f"Không đọc được tệp {filename}") from error
+        content_type = str(item.get("content_type") or "application/octet-stream")
+        content_type = content_type.replace("\r", "").replace("\n", "")[:255]
+        decoded.append(
+            {
+                "index": index,
+                "filename": filename,
+                "content_type": content_type,
+                "disposition": "attachment",
+                "size_bytes": len(content),
+                "content": content,
+            }
+        )
+    return validate_outgoing_attachments(decoded)
 
 
 def _expires_at_from_hours(hours: int | None) -> str | None:
@@ -392,20 +432,27 @@ def list_messages(
 
 @app.post("/api/messages/send")
 def send_new_message(payload: dict[str, Any] = Body(...), _session=Depends(require_admin)) -> dict[str, Any]:
+    attachments: list[dict[str, Any]] = []
     try:
+        attachments = _decode_outgoing_attachments(payload.get("attachments"))
         result = send_composed_message(
             source_message={},
             mode="send",
+            from_value=payload.get("from_alias") or None,
             to_value=payload.get("to", ""),
             cc_value=payload.get("cc", ""),
             subject=payload.get("subject", ""),
             body=payload.get("body", ""),
-            attachments=[],
+            attachments=attachments,
         )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except Exception as error:
-        raise HTTPException(status_code=502, detail=f"Gửi mail thất bại: {error}") from error
+        logger.exception("Standalone email delivery failed")
+        raise HTTPException(
+            status_code=502,
+            detail="Gửi mail thất bại. Máy chủ gửi mail chưa chấp nhận yêu cầu.",
+        ) from error
 
     sent_item = db.store_sent_message(
         {
@@ -416,7 +463,7 @@ def send_new_message(payload: dict[str, Any] = Body(...), _session=Depends(requi
             "cc": result["cc"],
             "subject": result["subject"],
             "body": payload.get("body", ""),
-            "attachments": [],
+            "attachments": attachments,
             "message_id": result["message_id"],
         }
     )
@@ -556,12 +603,15 @@ def send_message(message_id: int, payload: dict[str, Any] = Body(...), _session=
     if message is None:
         raise HTTPException(status_code=404, detail="Email không tồn tại")
     mode = (payload.get("mode") or "reply").strip().lower()
-    attachments = _resolve_message_attachments(message) if mode == "forward" else []
+    original_attachments = _resolve_message_attachments(message) if mode == "forward" else []
 
     try:
+        uploaded_attachments = _decode_outgoing_attachments(payload.get("attachments"))
+        attachments = validate_outgoing_attachments(original_attachments + uploaded_attachments)
         result = send_composed_message(
             source_message=message,
             mode=mode,
+            from_value=payload.get("from_alias") or None,
             to_value=payload.get("to", ""),
             cc_value=payload.get("cc", ""),
             subject=payload.get("subject", ""),
@@ -571,7 +621,11 @@ def send_message(message_id: int, payload: dict[str, Any] = Body(...), _session=
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except Exception as error:
-        raise HTTPException(status_code=502, detail=f"Gửi mail thất bại: {error}") from error
+        logger.exception("Message delivery failed for message %s", message_id)
+        raise HTTPException(
+            status_code=502,
+            detail="Gửi mail thất bại. Máy chủ gửi mail chưa chấp nhận yêu cầu.",
+        ) from error
 
     sent_item = db.store_sent_message(
         {
