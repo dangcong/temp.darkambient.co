@@ -540,3 +540,9 @@
 - Preserved: Mail behavior, API contracts, layout, marine user hero, destructive colors, amber OTP badges, and Google translation colors remain unchanged.
 - Affected files: index.html, user.html, style.css, user.css, app.js, user.js, logo.svg, backend/tests/test_branding.py, docs/UI_SYSTEM.md, docs/CHANGELOG.md.
 - Impact/Risk: low; this is a visual token migration with cache-busted assets and automated branding coverage.
+
+### 2026-09-07 - design_upstream_mail_capability_sync
+- Added: Approved design spec for selectively integrating upstream multi-recipient, sender alias, outgoing attachments, auto-forwarding and summary-list performance.
+- Preserved: DarkAmbient branding, Aurora Teal UI, existing API compatibility, production data, isolated VPS stack and apex Google Workspace.
+- Affected files: docs/superpowers/specs/2026-09-07-upstream-mail-capability-sync-design.md, docs/DECISIONS_INDEX.md, docs/DECISIONS.md, docs/MEMORY_INDEX.md, docs/PROJECT_CONTEXT.md, docs/CHANGELOG.md.
+- Impact/Risk: documentation only; runtime behavior is unchanged until the implementation plan is approved and executed.
