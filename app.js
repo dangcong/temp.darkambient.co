@@ -19,6 +19,10 @@ const state = {
   users: [],
   editingUserId: null,
   excludedAliases: [],
+  forwardingRules: [],
+  forwardingSearch: '',
+  editingForwardingRuleId: null,
+  newMessageAttachments: [],
   detailPaneWidth: null,
 };
 
@@ -39,14 +43,16 @@ const RELATIVE_TIME_REFRESH_MS = 10000;
 const STREAM_RECONNECT_DELAY_MS = 2500;
 const NEW_MESSAGE_HIGHLIGHT_MS = 180000;
 const MESSAGES_PER_PAGE = 12;
-const DETAIL_WIDTH_STORAGE_KEY = 'lushmail.detailPaneWidth';
+const DETAIL_WIDTH_STORAGE_KEY = 'darkambient.detailPaneWidth';
 const DETAIL_DEFAULT_WIDTH = 420;
 const DETAIL_MIN_WIDTH = 360;
 const DETAIL_MAX_WIDTH = 760;
 const MAIL_LIST_MIN_WIDTH = 420;
+const MAX_ATTACHMENT_COUNT = 10;
+const MAX_ATTACHMENT_TOTAL_BYTES = 18 * 1024 * 1024;
 const AVATAR_PALETTES = [
   { background: 'linear-gradient(135deg, #14b8a6 0%, #0f766e 100%)', color: '#f0fdfa' },
-  { background: 'linear-gradient(135deg, #ff9a5a 0%, #0d9488 100%)', color: '#f0fdfa' },
+  { background: 'linear-gradient(135deg, #2dd4bf 0%, #0d9488 100%)', color: '#f0fdfa' },
   { background: 'linear-gradient(135deg, #fb7185 0%, #e11d48 100%)', color: '#fff1f2' },
   { background: 'linear-gradient(135deg, #38bdf8 0%, #2563eb 100%)', color: '#eff6ff' },
   { background: 'linear-gradient(135deg, #34d399 0%, #059669 100%)', color: '#ecfdf5' },
@@ -66,9 +72,10 @@ function cacheDom() {
     'loginPage', 'appPage', 'loginForm', 'loginEmail', 'loginPassword', 'loginError', 'logoutBtn',
     'mailNav', 'folderTitle', 'folderCount', 'emailList', 'emptyState', 'detailContent',
     'mobileDetail', 'mobileDetailContent', 'sidebar', 'sidebarOverlay', 'sidebarToggle',
-    'closeSidebarBtn', 'mainSearch', 'deleteAllBtn', 'toast',
+    'closeSidebarBtn', 'mainSearch', 'deleteAllBtn', 'newMessageBtn', 'toast',
     'toastMsg', 'closeMobileDetailBtn', 'paginationInfo', 'paginationControls',
-    'mailView', 'usersView', 'autoDeleteView', 'usersTabBtn', 'autoDeleteTabBtn',
+    'mailView', 'usersView', 'autoDeleteView', 'forwardingView', 'usersTabBtn', 'autoDeleteTabBtn',
+    'forwardingTabBtn',
     'userCount', 'userList', 'userEmptyState',
     'createUserBtn', 'userModal', 'userForm', 'userModalTitle', 'userUsernameInput',
     'userPasswordInput', 'userPasswordHint', 'userRoleInput', 'userFormError',
@@ -76,9 +83,15 @@ function cacheDom() {
     'detailResizeHandle',
     'autoDeleteCount', 'autoDeleteForm', 'autoDeleteAddressInput', 'autoDeleteReasonInput',
     'saveAutoDeleteBtn', 'autoDeleteList', 'autoDeleteEmptyState',
-    'newMessageBtn', 'newMessageModal', 'newMessageForm', 'newMessageTo', 'newMessageCc',
+    'forwardingCount', 'forwardingForm', 'forwardingSourceInput', 'forwardingTargetInput',
+    'saveForwardingBtn', 'forwardingList', 'forwardingEmptyState', 'forwardingSearchInput',
+    'forwardingEditModal', 'forwardingEditForm', 'forwardingEditSourceInput',
+    'forwardingEditTargetInput', 'forwardingEditError', 'closeForwardingEditBtn',
+    'cancelForwardingEditBtn', 'saveForwardingEditBtn',
+    'newMessageModal', 'newMessageForm', 'newMessageFrom', 'newMessageTo', 'newMessageCc',
     'newMessageSubject', 'newMessageBody', 'newMessageError', 'closeNewMessageBtn',
-    'cancelNewMessageBtn', 'sendNewMessageBtn',
+    'cancelNewMessageBtn', 'sendNewMessageBtn', 'newMessageAttachmentInput',
+    'newMessageAttachmentBtn', 'newMessageAttachmentCount', 'newMessageAttachmentList',
   ];
   ids.forEach((id) => { dom[id] = document.getElementById(id); });
 }
@@ -90,19 +103,27 @@ function bindEvents() {
   dom.closeSidebarBtn.addEventListener('click', closeSidebar);
   dom.sidebarOverlay.addEventListener('click', closeSidebar);
   dom.deleteAllBtn.addEventListener('click', () => deleteAllMessagesInScope().catch(handleError));
+  dom.newMessageBtn.addEventListener('click', openNewMessageComposer);
   dom.mainSearch.addEventListener('input', onMainSearchChange);
   dom.closeMobileDetailBtn.addEventListener('click', closeMobileDetail);
   dom.usersTabBtn.addEventListener('click', () => setAdminView('users'));
   dom.autoDeleteTabBtn.addEventListener('click', () => setAdminView('auto-delete'));
+  dom.forwardingTabBtn.addEventListener('click', () => setAdminView('forwarding'));
+  dom.forwardingSearchInput.addEventListener('input', onForwardingSearchChange);
   dom.createUserBtn.addEventListener('click', openCreateUserModal);
   dom.autoDeleteForm.addEventListener('submit', onAutoDeleteFormSubmit);
+  dom.forwardingForm.addEventListener('submit', onForwardingFormSubmit);
+  dom.forwardingEditForm.addEventListener('submit', onForwardingEditSubmit);
   dom.userForm.addEventListener('submit', onUserFormSubmit);
   dom.closeUserModalBtn.addEventListener('click', closeUserModal);
   dom.cancelUserFormBtn.addEventListener('click', closeUserModal);
-  dom.newMessageBtn.addEventListener('click', openNewMessageComposer);
   dom.newMessageForm.addEventListener('submit', sendNewMessage);
   dom.closeNewMessageBtn.addEventListener('click', closeNewMessageComposer);
   dom.cancelNewMessageBtn.addEventListener('click', closeNewMessageComposer);
+  dom.closeForwardingEditBtn.addEventListener('click', closeForwardingEditModal);
+  dom.cancelForwardingEditBtn.addEventListener('click', closeForwardingEditModal);
+  dom.newMessageAttachmentBtn.addEventListener('click', () => dom.newMessageAttachmentInput.click());
+  dom.newMessageAttachmentInput.addEventListener('change', onNewMessageAttachmentChange);
   dom.newMessageModal.addEventListener('click', (event) => {
     if (event.target instanceof HTMLElement && event.target.dataset.newMessageClose === 'true') {
       closeNewMessageComposer();
@@ -111,6 +132,11 @@ function bindEvents() {
   dom.userModal.addEventListener('click', (event) => {
     if (event.target instanceof HTMLElement && event.target.dataset.userModalClose === 'true') {
       closeUserModal();
+    }
+  });
+  dom.forwardingEditModal.addEventListener('click', (event) => {
+    if (event.target instanceof HTMLElement && event.target.dataset.forwardingEditClose === 'true') {
+      closeForwardingEditModal();
     }
   });
 
@@ -143,6 +169,11 @@ function onDocumentClick(event) {
 }
 
 function onGlobalKeyDown(event) {
+  if (event.key === 'Escape' && !dom.newMessageModal.classList.contains('hidden')) {
+    event.preventDefault();
+    closeNewMessageComposer();
+    return;
+  }
   if (isEditableTarget(event.target)) {
     return;
   }
@@ -196,7 +227,8 @@ async function bootstrapSession() {
     }
     showApp();
     startAdminEventStream();
-    await refreshData({ silent: true, forceSync: true });
+    await refreshData({ silent: true, forceSync: false });
+    refreshData({ silent: true, forceSync: true }).catch(handleError);
     restartAutoRefresh();
     restartRelativeTimeTicker();
   } catch {
@@ -222,7 +254,8 @@ async function onLoginSubmit(event) {
     }
     showApp();
     startAdminEventStream();
-    await refreshData({ silent: true, forceSync: true });
+    await refreshData({ silent: true, forceSync: false });
+    refreshData({ silent: true, forceSync: true }).catch(handleError);
     restartAutoRefresh();
     restartRelativeTimeTicker();
     showToast('Đăng nhập thành công');
@@ -256,6 +289,10 @@ async function logout() {
   state.users = [];
   state.editingUserId = null;
   state.excludedAliases = [];
+  state.forwardingRules = [];
+  state.forwardingSearch = '';
+  state.editingForwardingRuleId = null;
+  state.newMessageAttachments = [];
   stopAutoRefresh();
   stopRelativeTimeTicker();
   stopAdminEventStream();
@@ -500,7 +537,7 @@ function onWindowResize() {
 }
 
 function setAdminView(viewName) {
-  const nextView = ['users', 'auto-delete'].includes(viewName) ? viewName : 'mail';
+  const nextView = ['users', 'auto-delete', 'forwarding'].includes(viewName) ? viewName : 'mail';
   state.currentView = nextView;
   dom.appPage.classList.toggle('users-mode', nextView !== 'mail');
   dom.mailView.classList.toggle('hidden', nextView !== 'mail');
@@ -509,6 +546,8 @@ function setAdminView(viewName) {
   dom.usersView.classList.toggle('flex', nextView === 'users');
   dom.autoDeleteView.classList.toggle('hidden', nextView !== 'auto-delete');
   dom.autoDeleteView.classList.toggle('flex', nextView === 'auto-delete');
+  dom.forwardingView.classList.toggle('hidden', nextView !== 'forwarding');
+  dom.forwardingView.classList.toggle('flex', nextView === 'forwarding');
   document.querySelectorAll('#mailNav .folder-btn').forEach((button) => {
     if (button.dataset.filter) {
       button.classList.toggle('active', nextView === 'mail' && button.dataset.filter === state.currentFilter);
@@ -516,6 +555,7 @@ function setAdminView(viewName) {
   });
   dom.usersTabBtn.classList.toggle('active', nextView === 'users');
   dom.autoDeleteTabBtn.classList.toggle('active', nextView === 'auto-delete');
+  dom.forwardingTabBtn.classList.toggle('active', nextView === 'forwarding');
   if (nextView === 'users') {
     closeMobileDetail();
     resetDetail();
@@ -525,6 +565,11 @@ function setAdminView(viewName) {
     closeMobileDetail();
     resetDetail();
     loadExcludedAliases().catch(handleError);
+  }
+  if (nextView === 'forwarding') {
+    closeMobileDetail();
+    resetDetail();
+    loadForwardingRules().catch(handleError);
   }
   closeSidebar();
   lucide.createIcons();
@@ -691,8 +736,8 @@ function renderMessages() {
     const selectedCls = isMessageSelected(message.id) ? 'selected' : '';
     const unreadCls = message.unread ? 'unread' : '';
     const recentCls = isRecentMessage(message.id) ? 'recent' : '';
-    const hasOtp = Boolean(message.extracted_otps?.length);
-    const hasLinks = Boolean(message.extracted_links?.length);
+    const hasOtp = Boolean(message.has_otps || message.extracted_otps?.length);
+    const hasLinks = Boolean(message.has_links || message.extracted_links?.length);
     const newBadge = isRecentMessage(message.id) ? '<span class="mail-badge mail-badge-new">Email mới</span>' : '';
     const otpBadge = hasOtp ? '<span class="text-[11px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 font-semibold">OTP</span>' : '';
     const linkBadge = hasLinks ? '<span class="text-[11px] px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-semibold">Link</span>' : '';
@@ -782,8 +827,8 @@ function renderSentMessageRow(message) {
   const subject = escapeHtml(message.subject || '(No subject)');
   const snippet = escapeHtml(message.snippet || message.text_body || '');
   const avatar = getAvatarPresentation(message);
-  const attachmentCount = Array.isArray(message.attachments) ? message.attachments.length : 0;
-  const modeLabel = message.mode === 'forward' ? 'Forward' : 'Reply';
+  const attachmentCount = Number(message.attachment_count || (Array.isArray(message.attachments) ? message.attachments.length : 0));
+  const modeLabel = getSentModeLabel(message.mode);
   const attachmentBadge = attachmentCount
     ? `<span class="mail-badge mail-badge-neutral"><i data-lucide="paperclip" class="w-3 h-3"></i>${attachmentCount} tệp</span>`
     : '';
@@ -1067,6 +1112,186 @@ async function deleteExcludedAlias(excludedAliasId) {
   await api(`/api/excluded-aliases/${excludedAliasId}`, { method: 'DELETE' });
   await loadExcludedAliases();
   showToast('Đã bỏ alias khỏi danh sách tự động xoá');
+}
+
+
+async function loadForwardingRules() {
+  const query = new URLSearchParams();
+  if (state.forwardingSearch.trim()) {
+    query.set('search', state.forwardingSearch.trim());
+  }
+  const payload = await api(`/api/forwarding-rules${query.toString() ? `?${query.toString()}` : ''}`);
+  state.forwardingRules = payload.items || [];
+  renderForwardingRules();
+}
+
+function onForwardingSearchChange(event) {
+  state.forwardingSearch = event.target.value;
+  clearTimeout(mainSearchTimer);
+  mainSearchTimer = window.setTimeout(() => {
+    loadForwardingRules().catch(handleError);
+  }, 180);
+}
+
+function renderForwardingRules() {
+  dom.forwardingCount.textContent = `${state.forwardingRules.length} quy tắc`;
+  if (!state.forwardingRules.length) {
+    dom.forwardingList.innerHTML = '';
+    dom.forwardingEmptyState.classList.remove('hidden');
+    lucide.createIcons();
+    return;
+  }
+
+  dom.forwardingEmptyState.classList.add('hidden');
+  dom.forwardingList.innerHTML = state.forwardingRules.map((rule) => {
+    const statusLabel = rule.enabled ? 'Đang bật' : 'Đã tạm dừng';
+    const statusClass = rule.enabled ? 'forwarding-badge-active' : 'forwarding-badge-paused';
+    const lastForwarded = rule.last_forwarded_at
+      ? `Chuyển tiếp gần nhất: ${escapeHtml(formatFullDate(rule.last_forwarded_at))}`
+      : 'Chưa có thư mới được chuyển tiếp';
+    const errorLine = rule.last_status === 'retrying' && rule.last_error
+      ? `<p class="forwarding-error mt-1">Lần gửi gần nhất lỗi, hệ thống đang tự thử lại.</p>`
+      : '';
+    return `
+      <div class="auto-delete-row" data-forwarding-rule-id="${rule.id}">
+        <div class="auto-delete-row-icon">
+          <i data-lucide="forward" class="w-4 h-4"></i>
+        </div>
+        <div class="min-w-0 flex-1">
+          <div class="flex items-center gap-2 flex-wrap">
+            <p class="text-sm font-bold text-gray-900 break-all">${escapeHtml((rule.source_addresses || [rule.source_address]).join(', '))}</p>
+            <i data-lucide="arrow-right" class="w-4 h-4 text-gray-400 flex-shrink-0"></i>
+            <p class="text-sm font-semibold text-gray-700 break-all">${escapeHtml((rule.target_addresses || [rule.target_address]).join(', '))}</p>
+            <span class="forwarding-badge ${statusClass}">${statusLabel}</span>
+          </div>
+          <p class="text-xs text-gray-400 mt-1">${lastForwarded}</p>
+          ${errorLine}
+        </div>
+        <div class="flex items-center gap-1">
+          <button class="user-action-btn" type="button" title="Sửa quy tắc" data-edit-forwarding-rule="${rule.id}">
+            <i data-lucide="pencil" class="w-4 h-4 pointer-events-none"></i>
+          </button>
+          <button class="user-action-btn" type="button" title="${rule.enabled ? 'Tạm dừng' : 'Bật chuyển tiếp'}" data-toggle-forwarding-rule="${rule.id}">
+            <i data-lucide="${rule.enabled ? 'pause' : 'play'}" class="w-4 h-4 pointer-events-none"></i>
+          </button>
+          <button class="user-action-btn danger" type="button" title="Xóa quy tắc" data-delete-forwarding-rule="${rule.id}">
+            <i data-lucide="trash-2" class="w-4 h-4 pointer-events-none"></i>
+          </button>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  dom.forwardingList.querySelectorAll('[data-toggle-forwarding-rule]').forEach((button) => {
+    button.addEventListener('click', () => toggleForwardingRule(Number(button.dataset.toggleForwardingRule)).catch(handleError));
+  });
+  dom.forwardingList.querySelectorAll('[data-edit-forwarding-rule]').forEach((button) => {
+    button.addEventListener('click', () => openForwardingEditModal(Number(button.dataset.editForwardingRule)));
+  });
+  dom.forwardingList.querySelectorAll('[data-delete-forwarding-rule]').forEach((button) => {
+    button.addEventListener('click', () => deleteForwardingRule(Number(button.dataset.deleteForwardingRule)).catch(handleError));
+  });
+  lucide.createIcons();
+}
+
+async function onForwardingFormSubmit(event) {
+  event.preventDefault();
+  const sourceAddress = dom.forwardingSourceInput.value.trim();
+  const targetAddress = dom.forwardingTargetInput.value.trim();
+  if (!sourceAddress || !targetAddress) {
+    showToast('Nhập đủ alias và email nhận chuyển tiếp');
+    return;
+  }
+
+  dom.saveForwardingBtn.disabled = true;
+  try {
+    await api('/api/forwarding-rules', {
+      method: 'POST',
+      body: JSON.stringify({ source_addresses: sourceAddress, target_addresses: targetAddress }),
+    });
+    dom.forwardingSourceInput.value = '';
+    dom.forwardingTargetInput.value = '';
+    await loadForwardingRules();
+    showToast('Đã bật tự động chuyển tiếp');
+  } catch (error) {
+    handleError(error);
+  } finally {
+    dom.saveForwardingBtn.disabled = false;
+  }
+}
+
+function openForwardingEditModal(ruleId) {
+  const rule = state.forwardingRules.find((item) => item.id === ruleId);
+  if (!rule) {
+    return;
+  }
+  state.editingForwardingRuleId = ruleId;
+  dom.forwardingEditSourceInput.value = (rule.source_addresses || [rule.source_address]).join(', ');
+  dom.forwardingEditTargetInput.value = (rule.target_addresses || [rule.target_address]).join(', ');
+  dom.forwardingEditError.classList.add('hidden');
+  dom.forwardingEditError.textContent = '';
+  dom.forwardingEditModal.classList.remove('hidden');
+  dom.forwardingEditModal.classList.add('flex');
+  window.setTimeout(() => dom.forwardingEditSourceInput.focus(), 30);
+  lucide.createIcons();
+}
+
+function closeForwardingEditModal() {
+  dom.forwardingEditModal.classList.add('hidden');
+  dom.forwardingEditModal.classList.remove('flex');
+  dom.forwardingEditError.classList.add('hidden');
+  dom.forwardingEditError.textContent = '';
+  state.editingForwardingRuleId = null;
+}
+
+async function onForwardingEditSubmit(event) {
+  event.preventDefault();
+  const ruleId = state.editingForwardingRuleId;
+  if (!ruleId) {
+    return;
+  }
+  dom.forwardingEditError.classList.add('hidden');
+  dom.saveForwardingEditBtn.disabled = true;
+  try {
+    await api(`/api/forwarding-rules/${ruleId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        source_addresses: dom.forwardingEditSourceInput.value.trim(),
+        target_addresses: dom.forwardingEditTargetInput.value.trim(),
+      }),
+    });
+    closeForwardingEditModal();
+    await loadForwardingRules();
+    showToast('Đã cập nhật quy tắc chuyển tiếp');
+  } catch (error) {
+    dom.forwardingEditError.textContent = error.message || 'Không cập nhật được quy tắc';
+    dom.forwardingEditError.classList.remove('hidden');
+  } finally {
+    dom.saveForwardingEditBtn.disabled = false;
+  }
+}
+
+async function toggleForwardingRule(ruleId) {
+  const rule = state.forwardingRules.find((item) => item.id === ruleId);
+  if (!rule) {
+    return;
+  }
+  await api(`/api/forwarding-rules/${ruleId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ enabled: !rule.enabled }),
+  });
+  await loadForwardingRules();
+  showToast(rule.enabled ? 'Đã tạm dừng chuyển tiếp' : 'Đã bật chuyển tiếp');
+}
+
+async function deleteForwardingRule(ruleId) {
+  const rule = state.forwardingRules.find((item) => item.id === ruleId);
+  if (!rule || !window.confirm(`Xóa chuyển tiếp ${rule.source_address} tới ${rule.target_address}?`)) {
+    return;
+  }
+  await api(`/api/forwarding-rules/${ruleId}`, { method: 'DELETE' });
+  await loadForwardingRules();
+  showToast('Đã xóa quy tắc chuyển tiếp');
 }
 
 async function handleMessageRowClick(messageId, event) {
@@ -1439,7 +1664,7 @@ function renderSentDetail(message) {
                 <i data-lucide="send-horizontal" class="w-4 h-4 text-gray-400"></i>
                 <span class="text-sm text-gray-500">${formatFullDate(sentAt)}</span>
               </div>
-              <span class="mail-badge mail-badge-sent">${message.mode === 'forward' ? 'Forward' : 'Reply'}</span>
+              <span class="mail-badge mail-badge-sent">${getSentModeLabel(message.mode)}</span>
             </div>
 
             <div class="detail-address-grid">
@@ -1548,6 +1773,8 @@ function renderComposePanel(message) {
   const forwardAttachmentNote = draft.mode === 'forward' && attachmentCount
     ? `<p class="detail-compose-note">${attachmentCount} tệp đính kèm sẽ được gửi cùng email chuyển tiếp.</p>`
     : '';
+  const selectedAttachments = renderComposeAttachmentItems(draft.attachments || []);
+  const selectedCount = (draft.attachments || []).length;
 
   return `
     <section class="detail-flat-section detail-compose-section">
@@ -1576,9 +1803,17 @@ function renderComposePanel(message) {
           <span class="detail-field-label">Message</span>
           <textarea data-compose-field="body" rows="10" class="detail-field-input detail-field-textarea">${escapeHtml(draft.body)}</textarea>
         </label>
+        ${selectedAttachments ? `<div class="compose-attachment-list">${selectedAttachments}</div>` : ''}
       </div>
       <div class="detail-compose-footer">
-        ${forwardAttachmentNote}
+        <div class="flex flex-wrap items-center gap-3 min-w-0">
+          <input type="file" multiple class="hidden" data-compose-attachment-input="true">
+          <button type="button" data-compose-attachment-button="true" class="compose-attachment-btn">
+            <i data-lucide="paperclip" class="w-4 h-4"></i>
+            Đính kèm${selectedCount ? ` (${selectedCount})` : ''}
+          </button>
+          ${forwardAttachmentNote}
+        </div>
         <button type="button" data-compose-send="true" class="detail-send-btn ${draft.mode === 'reply' ? 'detail-send-btn-reply' : 'detail-send-btn-forward'}">
           ${draft.mode === 'reply' ? 'Gửi trả lời' : 'Gửi chuyển tiếp'}
         </button>
@@ -1644,6 +1879,41 @@ function bindDetailActions() {
       await sendCompose();
     });
   });
+  document.querySelectorAll('[data-compose-attachment-button]').forEach((button) => {
+    button.addEventListener('click', () => {
+      button.closest('.detail-compose-section')?.querySelector('[data-compose-attachment-input]')?.click();
+    });
+  });
+  document.querySelectorAll('[data-compose-attachment-input]').forEach((input) => {
+    input.addEventListener('change', () => {
+      if (!state.composeDraft) {
+        return;
+      }
+      try {
+        state.composeDraft.attachments = appendAttachmentFiles(
+          state.composeDraft.attachments || [],
+          Array.from(input.files || []),
+          state.composeDraft.originalAttachmentBytes || 0,
+        );
+        if (state.selectedMessageCache) {
+          renderDetail(state.selectedMessageCache);
+        }
+      } catch (error) {
+        showToast(error.message || 'Không thể đính kèm tệp');
+      }
+    });
+  });
+  document.querySelectorAll('[data-remove-compose-attachment]').forEach((button) => {
+    button.addEventListener('click', () => {
+      if (!state.composeDraft) {
+        return;
+      }
+      state.composeDraft.attachments.splice(Number(button.dataset.removeComposeAttachment), 1);
+      if (state.selectedMessageCache) {
+        renderDetail(state.selectedMessageCache);
+      }
+    });
+  });
 }
 
 function startCompose(mode) {
@@ -1668,51 +1938,6 @@ function startCompose(mode) {
   });
 }
 
-function openNewMessageComposer() {
-  dom.newMessageForm.reset();
-  dom.newMessageError.classList.add('hidden');
-  dom.newMessageError.textContent = '';
-  dom.newMessageModal.classList.remove('hidden');
-  dom.newMessageModal.classList.add('flex');
-  dom.newMessageTo.focus();
-  lucide.createIcons();
-}
-
-function closeNewMessageComposer() {
-  dom.newMessageModal.classList.add('hidden');
-  dom.newMessageModal.classList.remove('flex');
-  dom.newMessageError.classList.add('hidden');
-  dom.newMessageError.textContent = '';
-}
-
-async function sendNewMessage(event) {
-  event.preventDefault();
-  dom.newMessageError.classList.add('hidden');
-  dom.sendNewMessageBtn.disabled = true;
-
-  try {
-    await api('/api/messages/send', {
-      method: 'POST',
-      body: JSON.stringify({
-        to: dom.newMessageTo.value,
-        cc: dom.newMessageCc.value,
-        subject: dom.newMessageSubject.value,
-        body: dom.newMessageBody.value,
-      }),
-    });
-    closeNewMessageComposer();
-    if (state.currentFilter === 'sent') {
-      await loadMessages({ preserveDetail: true });
-    }
-    showToast('Đã gửi email');
-  } catch (error) {
-    dom.newMessageError.textContent = error.message || 'Gửi email thất bại';
-    dom.newMessageError.classList.remove('hidden');
-  } finally {
-    dom.sendNewMessageBtn.disabled = false;
-  }
-}
-
 async function sendCompose() {
   const draft = state.composeDraft;
   if (!draft || !draft.messageId) {
@@ -1728,30 +1953,128 @@ async function sendCompose() {
       sendButton.textContent = 'Đang gửi...';
     }
 
-    await api(`/api/messages/${draft.messageId}/send`, {
-      method: 'POST',
-      body: JSON.stringify({
-        mode: draft.mode,
-        to: draft.to,
-        cc: draft.cc,
-        subject: draft.subject,
-        body: draft.body,
-      }),
-    });
-
+    const attachments = await serializeAttachmentFiles(draft.attachments || []);
+    const payload = {
+      mode: draft.mode,
+      to: draft.to,
+      cc: draft.cc,
+      subject: draft.subject,
+      body: draft.body,
+      attachments,
+    };
     state.composeDraft = null;
     if (state.selectedMessageCache) {
       renderDetail(state.selectedMessageCache);
     }
+    showToast('Đang gửi email...');
+    await api(`/api/messages/${draft.messageId}/send`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+
     showToast(draft.mode === 'reply' ? 'Đã gửi trả lời' : 'Đã gửi chuyển tiếp');
   } catch (error) {
-    handleError(error);
+    showToast(error.message || 'Gửi email thất bại');
   } finally {
     if (sendButton) {
       sendButton.disabled = false;
       sendButton.textContent = originalLabel;
     }
   }
+}
+
+function openNewMessageComposer() {
+  dom.newMessageForm.reset();
+  state.newMessageAttachments = [];
+  renderNewMessageAttachments();
+  dom.newMessageError.classList.add('hidden');
+  dom.newMessageError.textContent = '';
+  dom.newMessageModal.classList.remove('hidden');
+  dom.newMessageModal.classList.add('flex');
+  requestAnimationFrame(() => dom.newMessageFrom.focus());
+  lucide.createIcons();
+}
+
+function closeNewMessageComposer() {
+  dom.newMessageModal.classList.add('hidden');
+  dom.newMessageModal.classList.remove('flex');
+  dom.newMessageError.classList.add('hidden');
+  dom.newMessageError.textContent = '';
+  state.newMessageAttachments = [];
+  renderNewMessageAttachments();
+}
+
+function onNewMessageAttachmentChange() {
+  try {
+    state.newMessageAttachments = appendAttachmentFiles(
+      state.newMessageAttachments,
+      Array.from(dom.newMessageAttachmentInput.files || []),
+    );
+    renderNewMessageAttachments();
+  } catch (error) {
+    dom.newMessageError.textContent = error.message || 'Không thể đính kèm tệp';
+    dom.newMessageError.classList.remove('hidden');
+  } finally {
+    dom.newMessageAttachmentInput.value = '';
+  }
+}
+
+function renderNewMessageAttachments() {
+  const files = state.newMessageAttachments;
+  dom.newMessageAttachmentCount.textContent = files.length ? `(${files.length})` : '';
+  dom.newMessageAttachmentCount.classList.toggle('hidden', !files.length);
+  dom.newMessageAttachmentList.classList.toggle('hidden', !files.length);
+  dom.newMessageAttachmentList.innerHTML = renderComposeAttachmentItems(files, 'new');
+  dom.newMessageAttachmentList.querySelectorAll('[data-remove-new-attachment]').forEach((button) => {
+    button.addEventListener('click', () => {
+      state.newMessageAttachments.splice(Number(button.dataset.removeNewAttachment), 1);
+      renderNewMessageAttachments();
+    });
+  });
+  lucide.createIcons();
+}
+
+async function sendNewMessage(event) {
+  event.preventDefault();
+  dom.newMessageError.classList.add('hidden');
+  dom.newMessageError.textContent = '';
+  dom.sendNewMessageBtn.disabled = true;
+
+  try {
+    const attachments = await serializeAttachmentFiles(state.newMessageAttachments);
+    const payload = {
+      from_alias: dom.newMessageFrom.value,
+      to: dom.newMessageTo.value,
+      cc: dom.newMessageCc.value,
+      subject: dom.newMessageSubject.value,
+      body: dom.newMessageBody.value,
+      attachments,
+    };
+    closeNewMessageComposer();
+    showToast('Đang gửi email...');
+    await api('/api/messages/send', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    showToast('Đã gửi email');
+    if (state.currentFilter === 'sent') {
+      loadMessages({ preserveDetail: true }).catch(handleError);
+    }
+  } catch (error) {
+    showToast(error.message || 'Gửi email thất bại');
+  } finally {
+    dom.sendNewMessageBtn.disabled = false;
+  }
+}
+
+function getSentModeLabel(mode) {
+  if (mode === 'send') {
+    return 'Mới';
+  }
+  if (mode === 'forward') {
+    return 'Forward';
+  }
+  return 'Reply';
 }
 
 function buildComposeDraft(message, mode) {
@@ -1779,7 +2102,57 @@ function buildComposeDraft(message, mode) {
     body: mode === 'reply'
       ? `\n\n${headerLines.join('\n')}`
       : `Chuyển tiếp email từ ${message.recipient_address}\n${headerLines.join('\n')}`,
+    attachments: [],
+    originalAttachmentBytes: mode === 'forward'
+      ? (message.attachments || []).reduce((total, attachment) => total + Number(attachment.size_bytes || 0), 0)
+      : 0,
   };
+}
+
+function appendAttachmentFiles(existingFiles, nextFiles, baseBytes = 0) {
+  const combined = [...existingFiles, ...nextFiles];
+  if (combined.length > MAX_ATTACHMENT_COUNT) {
+    throw new Error(`Chỉ được đính kèm tối đa ${MAX_ATTACHMENT_COUNT} tệp`);
+  }
+  const totalBytes = baseBytes + combined.reduce((total, file) => total + Number(file.size || 0), 0);
+  if (totalBytes > MAX_ATTACHMENT_TOTAL_BYTES) {
+    throw new Error('Tổng dung lượng tệp đính kèm không được vượt quá 18 MB');
+  }
+  return combined;
+}
+
+function renderComposeAttachmentItems(files, scope = 'compose') {
+  return files.map((file, index) => `
+    <div class="compose-attachment-item">
+      <i data-lucide="file" class="w-4 h-4 text-gray-400 flex-shrink-0"></i>
+      <div class="min-w-0 flex-1">
+        <p class="compose-attachment-name">${escapeHtml(file.name || file.filename || 'Tệp đính kèm')}</p>
+        <p class="compose-attachment-size">${formatFileSize(file.size || file.size_bytes || 0)}</p>
+      </div>
+      <button type="button" class="compose-attachment-remove" title="Bỏ tệp" ${scope === 'new' ? `data-remove-new-attachment="${index}"` : `data-remove-compose-attachment="${index}"`}>
+        <i data-lucide="x" class="w-4 h-4 pointer-events-none"></i>
+      </button>
+    </div>
+  `).join('');
+}
+
+async function serializeAttachmentFiles(files) {
+  return Promise.all(files.map(async (file) => ({
+    filename: file.name || 'attachment',
+    content_type: file.type || 'application/octet-stream',
+    size_bytes: file.size || 0,
+    content_base64: arrayBufferToBase64(await file.arrayBuffer()),
+  })));
+}
+
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  const chunkSize = 32768;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return btoa(binary);
 }
 
 function renderTranslationMeta(messageId, translation, isTranslationVisible) {
@@ -2006,7 +2379,7 @@ function updateBulkToolbar() {
 
   const selectPageLabel = dom.selectPageBtn.querySelector('span');
   if (selectPageLabel) {
-    selectPageLabel.textContent = visibleCount && visibleSelectedCount === visibleCount ? 'Bá» chá»n trang' : 'Chá»n trang';
+    selectPageLabel.textContent = visibleCount && visibleSelectedCount === visibleCount ? 'Bỏ chọn trang' : 'Chọn trang';
   }
 
   const deleteSelectedLabel = dom.deleteSelectedBtn.querySelector('span');
@@ -2014,7 +2387,7 @@ function updateBulkToolbar() {
     deleteSelectedLabel.textContent = visibleSelectedCount > 0 ? `X?a ?? ch?n (${visibleSelectedCount})` : 'X?a ?? ch?n';
   }
 
-  dom.selectionSummary.textContent = visibleSelectedCount > 0 ? `${visibleSelectedCount} chá»n` : `${totalMessages} email`;
+  dom.selectionSummary.textContent = visibleSelectedCount > 0 ? `${visibleSelectedCount} chọn` : `${totalMessages} email`;
 }
 
 function renderPagination() {
@@ -2238,6 +2611,14 @@ async function api(url, options = {}) {
         detail = rawText;
       }
     }
+    const normalizedDetail = String(detail).trim().toLowerCase();
+    if (
+      normalizedDetail.includes('<!doctype html')
+      || normalizedDetail.includes('<html')
+      || normalizedDetail.includes('</body>')
+    ) {
+      detail = 'Máy chủ tạm thời không phản hồi. Vui lòng thử lại.';
+    }
     const error = new Error(detail);
     error.status = response.status;
     throw error;
@@ -2308,8 +2689,8 @@ function buildMessageListSignature(messages) {
     message.kind || 'inbox',
     formatAddressList(message.to, ''),
     formatAddressList(message.cc, ''),
-    (message.extracted_otps || []).length,
-    (message.extracted_links || []).length,
+    message.has_otps ? 1 : (message.extracted_otps || []).length,
+    message.has_links ? 1 : (message.extracted_links || []).length,
   ].join('|')).join('~');
 }
 

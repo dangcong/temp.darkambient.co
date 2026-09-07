@@ -43,12 +43,20 @@ def test_active_surfaces_use_darkambient_brand():
     assert "DarkAmbient Inbox" in user_html
     assert 'Dark<span class="text-lush-500">Ambient</span>' in index_html
     assert "DarkAmbient" in user_html
-    assert "logo.svg?v=20260721-aurora-teal" in index_html
+    assert "logo.svg?v=20260907-mail-capabilities" in index_html
     assert "logo.svg?v=20260721-aurora-teal" in user_html
     assert "from_email || 'DarkAmbient'" in app_js
     assert "LushMail" not in index_html
     assert "LushMail" not in user_html
     assert "from_email || 'LushMail'" not in app_js
+
+
+def test_active_surfaces_have_no_legacy_alias_or_mojibake():
+    active_text = "\n".join(read(name) for name in ("index.html", "user.html", "app.js", "user.js"))
+
+    assert "lush@" not in active_text.lower()
+    for broken_sequence in ("Ã", "Ä", "Â", "á»"):
+        assert broken_sequence not in active_text
 
 
 def test_logo_is_accessible_darkambient_monogram():
@@ -69,7 +77,7 @@ def test_active_surfaces_use_aurora_teal_theme():
         assert f"{shade}: '{value}'" in index_html
         assert f"{shade}: '{value}'" in user_html
 
-    assert "style.css?v=20260721-aurora-teal" in index_html
+    assert "style.css?v=20260907-mail-capabilities" in index_html
     assert "user.css?v=20260721-aurora-teal" in user_html
 
 
