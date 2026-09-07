@@ -459,6 +459,32 @@ def row_to_sent_message(row: sqlite3.Row | None) -> dict[str, Any] | None:
     }
 
 
+def row_to_sent_message_summary(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    subject = decode_mime_text(row["subject"] or "")
+    text_body = row["text_body"] or ""
+    attachments = json.loads(row["attachments_json"] or "[]")
+    return {
+        "id": row["id"],
+        "kind": "sent",
+        "source_message_id": row["source_message_id"],
+        "mode": row["mode"],
+        "from_email": row["from_email"],
+        "to": json.loads(row["to_json"] or "[]"),
+        "cc": json.loads(row["cc_json"] or "[]"),
+        "subject": subject,
+        "snippet": text_body[:240],
+        "attachment_count": len(attachments),
+        "message_id": row["message_id"],
+        "sent_at": row["sent_at"],
+        "received_at": row["sent_at"],
+        "unread": False,
+        "important": False,
+        "suppressed": bool(row["suppressed"]),
+    }
+
+
 def row_to_excluded_alias(row: sqlite3.Row | None) -> dict[str, Any] | None:
     if row is None:
         return None
@@ -1315,7 +1341,7 @@ def list_sent_messages(*, search: str = "", limit: int = 200) -> list[dict[str, 
     values.append(limit)
     with _connect() as conn:
         rows = conn.execute(query, values).fetchall()
-    return [row_to_sent_message(row) for row in rows]
+    return [row_to_sent_message_summary(row) for row in rows]
 
 
 def delete_sent_messages_by_scope(*, search: str = "") -> dict[str, Any]:

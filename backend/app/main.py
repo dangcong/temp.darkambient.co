@@ -168,10 +168,12 @@ async def _user_event_stream(request: Request, alias: str):
 async def add_cache_headers(request: Request, call_next):
     response = await call_next(request)
     path = request.url.path
-    if path in {"/", "/index.html", "/user.html", "/app.js", "/user.js", "/style.css", "/user.css"}:
+    if path in {"/", "/index.html", "/user.html"}:
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
+    elif path in {"/app.js", "/user.js", "/style.css", "/user.css", "/logo.svg"}:
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
     return response
 
 

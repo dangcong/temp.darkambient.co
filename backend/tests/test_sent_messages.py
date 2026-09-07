@@ -44,6 +44,14 @@ def test_store_sent_message_keeps_recipients_and_attachment_payload(monkeypatch,
 
     listed = db.list_sent_messages(search="receiver")
     assert [message["id"] for message in listed] == [item["id"]]
+    assert "text_body" not in listed[0]
+    assert "html_body" not in listed[0]
+    assert "attachments" not in listed[0]
+    assert listed[0]["attachment_count"] == 1
+
+    detail = db.get_sent_message(item["id"])
+    assert detail["text_body"] == "Please see attachments."
+    assert detail["attachments"][0]["filename"] == "invoice.pdf"
 
     attachment = db.get_sent_message_attachment(item["id"], 0)
     assert attachment["filename"] == "invoice.pdf"
