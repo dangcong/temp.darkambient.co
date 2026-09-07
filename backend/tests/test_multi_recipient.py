@@ -229,3 +229,12 @@ def test_user_reader_keeps_active_alias_on_detail_actions():
     assert "state.currentAlias = payload.alias?.address" in user_js
     assert "?alias=${encodeURIComponent(state.currentAlias)}" in user_js
     assert "new URLSearchParams({ alias: state.currentAlias })" in user_js
+
+
+def test_admin_flag_updates_preserve_each_row_recipient_identity():
+    app_js = (ROOT / "app.js").read_text(encoding="utf-8")
+
+    assert "function mergeMessageFlags(existing, updated)" in app_js
+    assert "item.id === messageId ? mergeMessageFlags(item, updated) : item" in app_js
+    assert "state.selectedMessageCache = mergeMessageFlags" in app_js
+    assert "item.id === messageId ? updated : item" not in app_js

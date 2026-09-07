@@ -1539,6 +1539,14 @@ function getDeleteAllScopeLabel() {
   return labels[state.currentFilter] || 'X\u00f3a to\u00e0n b\u1ed9 email trong inbox hi\u1ec7n t\u1ea1i?';
 }
 
+function mergeMessageFlags(existing, updated) {
+  return {
+    ...existing,
+    important: Boolean(updated.important),
+    unread: updated.unread ?? existing.unread,
+  };
+}
+
 async function toggleImportant(messageId) {
   const message = state.messages.find((item) => item.id === messageId) || state.selectedMessageCache;
   if (!message) {
@@ -1551,9 +1559,14 @@ async function toggleImportant(messageId) {
       body: JSON.stringify({ important: !message.important }),
     });
     const updated = payload.item;
-    state.messages = state.messages.map((item) => (item.id === messageId ? updated : item));
+    state.messages = state.messages.map((item) => (
+      item.id === messageId ? mergeMessageFlags(item, updated) : item
+    ));
     if (state.selectedMessageId === messageId) {
-      state.selectedMessageCache = { ...(state.selectedMessageCache || updated), ...updated };
+      state.selectedMessageCache = mergeMessageFlags(
+        state.selectedMessageCache || updated,
+        updated,
+      );
       renderDetail(state.selectedMessageCache);
     }
     if (state.currentFilter === 'important' && !updated.important) {
