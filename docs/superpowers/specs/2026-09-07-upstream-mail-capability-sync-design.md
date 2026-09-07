@@ -92,7 +92,7 @@ Giữ cấu trúc tương thích upstream:
 - `forwarding_deliveries`: một lần rule khớp với một message, unique `(rule_id, message_id)`.
 - `forwarding_delivery_targets`: một hàng cho mỗi địa chỉ đích với status, attempt count, error và thời điểm retry riêng.
 
-Một source alias chỉ thuộc tối đa một rule definition để tránh rule chồng chéo khó dự đoán. Source và target trong cùng rule không được trùng nhau. Xóa rule cascade các delivery liên quan; disable rule hủy các delivery chưa hoàn tất của rule đó.
+Một source alias chỉ thuộc tối đa một rule definition để tránh rule chồng chéo khó dự đoán. Mọi target phải nằm ngoài `@temp.darkambient.co`; source và target trong cùng rule cũng không được trùng nhau. Xóa rule cascade các delivery liên quan; disable rule hủy các delivery chưa hoàn tất của rule đó.
 
 ## Data flow
 
