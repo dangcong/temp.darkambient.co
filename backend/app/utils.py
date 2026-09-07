@@ -20,6 +20,10 @@ def iso_in_hours(hours: int) -> str:
     return (utc_now() + timedelta(hours=hours)).isoformat()
 
 
+def iso_in_seconds(seconds: int) -> str:
+    return (utc_now() + timedelta(seconds=seconds)).isoformat()
+
+
 def iso_days_ago(days: int) -> str:
     return (utc_now() - timedelta(days=days)).isoformat()
 

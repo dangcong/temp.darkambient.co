@@ -11,7 +11,7 @@ from typing import Any
 from .config import settings
 from .parser import decode_mime_text, extract_links, extract_otps, html_to_text
 from .translator import DEFAULT_TARGET_LANGUAGE, infer_language_hint, should_offer_translation
-from .utils import iso_in_hours, normalize_address, split_address, utc_now_iso
+from .utils import iso_in_hours, iso_in_seconds, normalize_address, split_address, utc_now_iso
 
 
 PASSWORD_HASH_ITERATIONS = 260_000
@@ -1457,6 +1457,126 @@ def _enqueue_forwarding_deliveries(
                 """,
                 (delivery["id"], target_address, now, now, now),
             )
+
+
+def list_due_forwarding_deliveries(limit: int = 20) -> list[dict[str, Any]]:
+    now = utc_now_iso()
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                delivery_targets.id AS target_delivery_id,
+                deliveries.id AS delivery_id,
+                delivery_targets.attempt_count AS delivery_attempt_count,
+                rules.source_address AS forwarding_source_address,
+                delivery_targets.target_address AS forwarding_target_address,
+                messages.*
+            FROM forwarding_delivery_targets AS delivery_targets
+            JOIN forwarding_deliveries AS deliveries
+              ON deliveries.id = delivery_targets.delivery_id
+            JOIN forwarding_rules AS rules ON rules.id = deliveries.rule_id
+            JOIN messages ON messages.id = deliveries.message_id
+            WHERE delivery_targets.status IN ('pending', 'retrying')
+              AND delivery_targets.next_attempt_at <= ?
+              AND rules.enabled = 1
+              AND messages.suppressed = 0
+            ORDER BY delivery_targets.next_attempt_at ASC, delivery_targets.id ASC
+            LIMIT ?
+            """,
+            (now, max(1, int(limit))),
+        ).fetchall()
+
+    deliveries: list[dict[str, Any]] = []
+    for row in rows:
+        message = row_to_message(row)
+        if message is None:
+            continue
+        deliveries.append(
+            {
+                "id": row["target_delivery_id"],
+                "parent_id": row["delivery_id"],
+                "attempt_count": row["delivery_attempt_count"],
+                "source_address": row["forwarding_source_address"],
+                "target_address": row["forwarding_target_address"],
+                "message": message,
+            }
+        )
+    return deliveries
+
+
+def mark_forwarding_delivery_success(delivery_id: int) -> None:
+    now = utc_now_iso()
+    with _connect() as conn:
+        target = conn.execute(
+            "SELECT delivery_id FROM forwarding_delivery_targets WHERE id = ?",
+            (delivery_id,),
+        ).fetchone()
+        if target is None:
+            return
+        conn.execute(
+            """
+            UPDATE forwarding_delivery_targets
+            SET status = 'forwarded', attempt_count = attempt_count + 1,
+                last_error = NULL, updated_at = ?, forwarded_at = ?
+            WHERE id = ?
+            """,
+            (now, now, delivery_id),
+        )
+        remaining = conn.execute(
+            "SELECT COUNT(*) AS count FROM forwarding_delivery_targets "
+            "WHERE delivery_id = ? AND status != 'forwarded'",
+            (target["delivery_id"],),
+        ).fetchone()["count"]
+        if remaining == 0:
+            conn.execute(
+                "UPDATE forwarding_deliveries SET status = 'forwarded', "
+                "attempt_count = attempt_count + 1, last_error = NULL, "
+                "updated_at = ?, forwarded_at = ? WHERE id = ?",
+                (now, now, target["delivery_id"]),
+            )
+        else:
+            retrying = conn.execute(
+                "SELECT COUNT(*) AS count FROM forwarding_delivery_targets "
+                "WHERE delivery_id = ? AND status = 'retrying'",
+                (target["delivery_id"],),
+            ).fetchone()["count"]
+            conn.execute(
+                "UPDATE forwarding_deliveries SET status = ?, updated_at = ? WHERE id = ?",
+                ("retrying" if retrying else "pending", now, target["delivery_id"]),
+            )
+
+
+def mark_forwarding_delivery_failure(delivery_id: int, error: str) -> None:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT delivery_id, attempt_count FROM forwarding_delivery_targets WHERE id = ?",
+            (delivery_id,),
+        ).fetchone()
+        if row is None:
+            return
+        next_attempt_count = int(row["attempt_count"] or 0) + 1
+        retry_delay = min(3600, 30 * (2 ** min(next_attempt_count - 1, 7)))
+        clean_error = str(error or "Forwarding failed")[:500]
+        conn.execute(
+            """
+            UPDATE forwarding_delivery_targets
+            SET status = 'retrying', attempt_count = ?, last_error = ?,
+                next_attempt_at = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                next_attempt_count,
+                clean_error,
+                iso_in_seconds(retry_delay),
+                utc_now_iso(),
+                delivery_id,
+            ),
+        )
+        conn.execute(
+            "UPDATE forwarding_deliveries SET status = 'retrying', last_error = ?, "
+            "updated_at = ? WHERE id = ?",
+            (clean_error, utc_now_iso(), row["delivery_id"]),
+        )
 
 
 def cleanup_expired_aliases(now_iso: str) -> int:

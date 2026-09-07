@@ -92,3 +92,36 @@ def test_attachment_count_and_total_limit_are_enforced(monkeypatch):
         mailer.validate_outgoing_attachments(
             [{"filename": "video.mp4", "content": b"12345"}]
         )
+
+
+def test_automatic_forward_preserves_source_context(monkeypatch):
+    captured = {}
+
+    def fake_send_composed_message(**kwargs):
+        captured.update(kwargs)
+        return {"ok": True}
+
+    monkeypatch.setattr(mailer, "send_composed_message", fake_send_composed_message)
+    result = mailer.send_automatic_forward(
+        source_message={
+            "recipient_address": "first@temp.darkambient.co",
+            "from_name": "Original Sender",
+            "from_email": "sender@example.com",
+            "subject": "Original subject",
+            "text_body": "Original body",
+            "html_body": "<p>Original body</p>",
+            "received_at": "2026-09-07T00:00:00+00:00",
+        },
+        target_address="target@example.com",
+        attachments=[{"filename": "result.pdf", "content": b"pdf"}],
+    )
+
+    assert result == {"ok": True}
+    assert captured["from_value"] is None
+    assert captured["to_value"] == "target@example.com"
+    assert captured["subject"] == "Original subject"
+    assert "Original Sender <sender@example.com>" in captured["body"]
+    assert captured["html_body"] == "<p>Original body</p>"
+    assert captured["reply_to_value"] == "first@temp.darkambient.co"
+    assert captured["forwarded_to_value"] == "first@temp.darkambient.co"
+    assert captured["attachments"][0]["filename"] == "result.pdf"

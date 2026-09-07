@@ -47,6 +47,9 @@ def send_composed_message(
     cc_value: str,
     subject: str,
     body: str,
+    html_body: str | None = None,
+    reply_to_value: str | None = None,
+    forwarded_to_value: str | None = None,
     attachments: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     from_address = (
@@ -70,8 +73,15 @@ def send_composed_message(
 
     message = EmailMessage()
     message["From"] = formataddr((settings.smtp_from_name, from_address))
-    if from_address != envelope_from_address:
-        message["Reply-To"] = from_address
+    reply_to_address = from_address
+    if reply_to_value is not None:
+        reply_to_address = normalize_lookup_address(reply_to_value, settings.mail_domain)
+    if reply_to_value is not None or from_address != envelope_from_address:
+        message["Reply-To"] = reply_to_address
+    if forwarded_to_value:
+        message["X-Forwarded-To"] = normalize_lookup_address(
+            forwarded_to_value, settings.mail_domain
+        )
     message["To"] = ", ".join(to_addresses)
     if cc_addresses:
         message["Cc"] = ", ".join(cc_addresses)
@@ -86,6 +96,8 @@ def send_composed_message(
         message["References"] = original_message_id
 
     message.set_content(body)
+    if html_body and html_body.strip():
+        message.add_alternative(html_body, subtype="html")
     outgoing_attachments = validate_outgoing_attachments(attachments)
     for attachment in outgoing_attachments:
         content = attachment.get("content")
@@ -131,3 +143,56 @@ def send_composed_message(
         "message_id": message["Message-Id"],
         "attachment_count": len(outgoing_attachments),
     }
+
+
+def send_automatic_forward(
+    *,
+    source_message: dict[str, Any],
+    target_address: str,
+    attachments: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    source_address = str(source_message.get("recipient_address") or "").strip()
+    sender_name = str(
+        source_message.get("from_name")
+        or source_message.get("from_email")
+        or "Unknown Sender"
+    ).strip()
+    sender_email = str(source_message.get("from_email") or "").strip()
+    original_subject = str(
+        source_message.get("subject") or "(No subject)"
+    ).strip()
+    original_body = str(
+        source_message.get("text_body") or source_message.get("snippet") or ""
+    ).strip()
+    original_html = str(source_message.get("html_body") or "").strip()
+    sender_line = (
+        f"{sender_name} <{sender_email}>"
+        if sender_email and sender_email not in sender_name
+        else sender_name
+    )
+    body = "\n".join(
+        [
+            f"Email được tự động chuyển tiếp từ {source_address}.",
+            "",
+            "---------- Thư gốc ----------",
+            f"Từ: {sender_line}",
+            f"Đến: {source_address}",
+            f"Ngày: {source_message.get('received_at') or '-'}",
+            f"Tiêu đề: {original_subject}",
+            "",
+            original_body,
+        ]
+    )
+    return send_composed_message(
+        source_message=source_message,
+        mode="auto-forward",
+        from_value=None,
+        to_value=target_address,
+        cc_value="",
+        subject=original_subject,
+        body=body,
+        html_body=original_html,
+        reply_to_value=source_address,
+        forwarded_to_value=source_address,
+        attachments=attachments,
+    )

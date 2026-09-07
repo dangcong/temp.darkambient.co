@@ -1,7 +1,7 @@
 import pytest
 from fastapi import HTTPException
 
-from backend.app import db, main
+from backend.app import db, imap_sync, main
 from backend.app.config import settings
 
 
@@ -147,3 +147,105 @@ def test_init_db_backfills_legacy_delivery_targets_idempotently(monkeypatch, tmp
             (delivery["id"],),
         ).fetchall()
     assert [row["target_address"] for row in targets] == ["owner@gmail.com"]
+
+
+def test_forwarding_worker_sends_cached_attachments_and_stores_audit(monkeypatch, tmp_path):
+    _init_temp_db(monkeypatch, tmp_path)
+    db.create_forwarding_rule("first@temp.darkambient.co", "owner@gmail.com")
+    payload = _message_payload(6)
+    payload["attachments"] = [
+        {
+            "index": 0,
+            "filename": "result.pdf",
+            "content_type": "application/pdf",
+            "disposition": "attachment",
+            "size_bytes": 4,
+        }
+    ]
+    payload["attachment_payloads"] = [
+        {
+            **payload["attachments"][0],
+            "content": b"test",
+        }
+    ]
+    db.store_message(payload)
+    captured = {}
+    stored_sent = []
+
+    def fake_send_automatic_forward(**kwargs):
+        captured.update(kwargs)
+        return {
+            "mode": "auto-forward",
+            "to": [kwargs["target_address"]],
+            "cc": [],
+            "subject": kwargs["source_message"]["subject"],
+            "from": "contact@temp.darkambient.co",
+            "message_id": "<forwarded@temp.darkambient.co>",
+            "attachment_count": len(kwargs["attachments"]),
+        }
+
+    monkeypatch.setattr(imap_sync, "send_automatic_forward", fake_send_automatic_forward)
+    monkeypatch.setattr(
+        db,
+        "store_sent_message",
+        lambda item: stored_sent.append(item) or {"id": 99},
+    )
+
+    imap_sync.MailSyncService()._process_pending_forwards()
+
+    assert captured["target_address"] == "owner@gmail.com"
+    assert captured["attachments"][0]["content"] == b"test"
+    assert stored_sent[0]["mode"] == "auto-forward"
+    assert stored_sent[0]["to"] == ["owner@gmail.com"]
+    assert db.list_due_forwarding_deliveries() == []
+    assert db.list_forwarding_rules()[0]["last_status"] == "forwarded"
+
+
+def test_forwarding_targets_retry_independently(monkeypatch, tmp_path):
+    _init_temp_db(monkeypatch, tmp_path)
+    db.create_forwarding_rule(
+        "first@temp.darkambient.co",
+        ["owner@gmail.com", "backup@outlook.com"],
+    )
+    db.store_message(_message_payload(7))
+    attempts = []
+    stored_sent = []
+
+    def fake_send(**kwargs):
+        attempts.append(kwargs["target_address"])
+        if kwargs["target_address"] == "owner@gmail.com":
+            raise RuntimeError("Gmail temporarily unavailable")
+        return {
+            "mode": "auto-forward",
+            "to": [kwargs["target_address"]],
+            "cc": [],
+            "subject": "Forwarding test",
+            "from": "contact@temp.darkambient.co",
+            "message_id": "<forwarded-target@temp.darkambient.co>",
+        }
+
+    monkeypatch.setattr(imap_sync, "send_automatic_forward", fake_send)
+    monkeypatch.setattr(
+        db,
+        "store_sent_message",
+        lambda item: stored_sent.append(item) or {"id": 100},
+    )
+
+    imap_sync.MailSyncService()._process_pending_forwards()
+
+    assert set(attempts) == {"backup@outlook.com", "owner@gmail.com"}
+    assert [item["to"] for item in stored_sent] == [["backup@outlook.com"]]
+    with db._connect() as conn:
+        statuses = conn.execute(
+            "SELECT target_address, status, attempt_count "
+            "FROM forwarding_delivery_targets ORDER BY target_address"
+        ).fetchall()
+    assert [(row["target_address"], row["status"]) for row in statuses] == [
+        ("backup@outlook.com", "forwarded"),
+        ("owner@gmail.com", "retrying"),
+    ]
+    assert {row["target_address"]: row["attempt_count"] for row in statuses} == {
+        "backup@outlook.com": 1,
+        "owner@gmail.com": 1,
+    }
+    assert [item["target_address"] for item in db.list_due_forwarding_deliveries()] == []

@@ -12,6 +12,7 @@ from email.utils import getaddresses
 from . import db
 from .config import settings
 from .events import inbox_events
+from .mailer import parse_address_list, send_automatic_forward
 from .parser import (
     collect_headers,
     decode_mime_text,
@@ -154,6 +155,7 @@ class MailSyncService:
                 search_criteria = "ALL" if last_uid == 0 else f"UID {last_uid + 1}:*"
                 status, data = client.uid("search", None, search_criteria)
                 if status != "OK" or not data or not data[0]:
+                    self._process_pending_forwards()
                     self._set_status(last_sync_finished_at=utc_now_iso())
                     return 0
 
@@ -177,11 +179,58 @@ class MailSyncService:
                             or [stored["recipient_address"]]
                         )
 
+            self._process_pending_forwards()
             finished_at = utc_now_iso()
             self._set_status(last_sync_finished_at=finished_at, last_sync_success_at=finished_at, last_error=None)
             if changed_aliases:
                 inbox_events.publish(changed_aliases)
             return synced
+
+    def _process_pending_forwards(self) -> None:
+        for delivery in db.list_due_forwarding_deliveries(limit=20):
+            message = delivery["message"]
+            try:
+                attachments = db.list_message_attachment_payloads(message["id"])
+                result = send_automatic_forward(
+                    source_message=message,
+                    target_address=delivery["target_address"],
+                    attachments=attachments,
+                )
+                try:
+                    db.store_sent_message(
+                        {
+                            "source_message_id": message["id"],
+                            "mode": "auto-forward",
+                            "from_email": message["recipient_address"],
+                            "to": parse_address_list(delivery["target_address"]),
+                            "cc": [],
+                            "subject": message.get("subject") or "(No subject)",
+                            "body": message.get("text_body") or message.get("snippet") or "",
+                            "attachments": attachments,
+                            "message_id": result.get("message_id"),
+                        }
+                    )
+                except Exception:
+                    logger.exception(
+                        "Forwarded message %s but failed to store sent audit row",
+                        message["id"],
+                    )
+                db.mark_forwarding_delivery_success(delivery["id"])
+                logger.info(
+                    "Forwarded message %s from %s to %s",
+                    message["id"],
+                    delivery["source_address"],
+                    delivery["target_address"],
+                )
+            except Exception as exc:
+                db.mark_forwarding_delivery_failure(delivery["id"], str(exc))
+                logger.warning(
+                    "Forwarding message %s from %s to %s failed: %s",
+                    message.get("id"),
+                    delivery["source_address"],
+                    delivery["target_address"],
+                    exc,
+                )
 
     def _wait_for_idle_activity(self) -> bool:
         self._touch_heartbeat(mode="idle", idle_active=True, last_error=None)
