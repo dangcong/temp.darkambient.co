@@ -15,9 +15,12 @@
 - Semantic rose/red, amber OTP, Google translation colors, and the marine user hero remain independent of the brand palette.
 - Message rows use simple borders, avatar, sender, subject, preview, and relative time.
 - Detail views use sender meta, subject, timestamp, then rendered email body.
+- The admin composer is a focused modal with sender alias, recipients, subject, body and a compact attachment list; it must remain usable within one viewport on mobile.
+- Automatic forwarding is a first-level admin view. Rules use the same restrained list-row pattern as auto-delete and users, with visible active/paused state and per-rule edit controls.
 
 ## Constraints
 - Preserve Vietnamese text as UTF-8.
 - Keep border radii and decoration restrained.
 - Do not add decorative cards or marketing sections to operational mail screens.
+- Keep `send`, `reply`, `forward` and forwarding-rule errors actionable without exposing raw SMTP exception text.
 

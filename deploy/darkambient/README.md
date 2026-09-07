@@ -94,11 +94,19 @@ Từ Internet chỉ được mở `22`, `25`, `80`, `443`. Các cổng `587`, `9
 
 Kiểm thử mail gồm:
 
-1. Gửi từ hệ thống bên ngoài vào một alias chưa tạo trước tại `@temp.darkambient.co`.
-2. Xác nhận alias gốc, subject, body, OTP/link và attachment xuất hiện trong app.
-3. Dùng admin UI để send mới, reply và forward.
-4. Kiểm tra Authentication-Results của mail nhận: SPF/DKIM/DMARC.
-5. Thử relay không xác thực với sender và recipient đều ngoài domain; server phải trả `5xx` và không queue mail.
+1. Gửi một email từ hệ thống bên ngoài tới hai alias chưa tạo trước tại `@temp.darkambient.co`; xác nhận cả hai inbox mở được cùng message với đúng alias đang chọn.
+2. Xác nhận subject, body, OTP/link và attachment xuất hiện trong app.
+3. Dùng admin UI để send mới, reply và forward bằng alias nguồn; kiểm tra giới hạn 10 tệp và tổng 18 MB.
+4. Tạo forwarding rule từ nhiều alias tới nhiều email ngoài domain, gửi thư mới và xác nhận từng target được ghi nhận độc lập. Target thuộc `@temp.darkambient.co` phải bị từ chối.
+5. Kiểm tra Authentication-Results của mail nhận: SPF/DKIM/DMARC.
+6. Thử relay không xác thực với sender và recipient đều ngoài domain; server phải trả `5xx` và không queue mail.
+
+Forwarding chỉ enqueue cho thư mới sau khi rule được bật. Target lỗi được retry theo backoff từ 30 giây, tối đa 1 giờ; xem trạng thái gần nhất trong admin UI và log app bằng:
+
+```bash
+cd /opt/darkambient-temp-mail/app/deploy/darkambient
+docker logs --tail 200 darkambient-temp-app
+```
 
 ## Backup
 

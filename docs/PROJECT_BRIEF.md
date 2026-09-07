@@ -11,6 +11,12 @@
 - `backend/app/` contains FastAPI routes, auth/session, SQLite persistence, IMAP sync, parsing, translation, and send helpers.
 - `deploy/` contains VPS runtime scripts/config.
 
+## Mail Capabilities
+- One inbound message can belong to every parsed `To`/`Cc` alias through `message_recipients`; admin and user views preserve the active recipient identity.
+- Admin can send a new message, reply, or forward using an `@temp.darkambient.co` alias and up to 10 attachments / 18 MB total.
+- Forwarding rules accept multiple source aliases and external targets. New inbound messages enqueue one delivery per target with idempotency and exponential retry.
+- Message list endpoints return summaries; full bodies and attachment payloads remain detail-only.
+
 ## Build / Test / Run
 - Dev server: `.\.venv\Scripts\python.exe -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8010 --reload`
 - Tests: `.\.venv\Scripts\python.exe -m pytest -q`
@@ -23,4 +29,5 @@
 - Preserve UTF-8 Vietnamese UI text.
 - Keep UI changes close to the current DarkAmbient mail-workspace visual language and avoid broad layout rewrites.
 - Treat the public `temp.darkambient.co` repository as the only operational Git origin; local and VPS maintenance use its `main` branch.
+- Never allow an automatic-forward target inside `@temp.darkambient.co`; this prevents forwarding loops.
 

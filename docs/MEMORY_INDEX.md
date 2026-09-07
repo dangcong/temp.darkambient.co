@@ -25,6 +25,7 @@
 - `backend/app/db.py`
 - `backend/app/imap_sync.py`
 - `backend/app/parser.py`
+- `docs/modules/mail-capabilities.md` for recipient mapping, outgoing attachments, forwarding routes/schema and retry behavior
 
 ### Deploy / VPS
 - `deploy/AGENTS.md`

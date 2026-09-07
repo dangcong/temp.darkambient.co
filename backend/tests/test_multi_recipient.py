@@ -1,5 +1,13 @@
-from backend.app import db
+from pathlib import Path
+
+import pytest
+from fastapi import HTTPException
+
+from backend.app import db, main
 from backend.app.config import settings
+
+
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def _init_temp_db(monkeypatch, tmp_path):
@@ -80,3 +88,85 @@ def test_init_db_backfills_recipient_mapping_idempotently(monkeypatch, tmp_path)
     assert [row["recipient_address"] for row in rows] == [
         "first@temp.darkambient.co"
     ]
+
+
+def test_public_routes_authorize_every_mapped_recipient(monkeypatch, tmp_path):
+    _init_temp_db(monkeypatch, tmp_path)
+    payload = _message_payload(3)
+    payload["attachments"] = [
+        {
+            "index": 0,
+            "filename": "result.txt",
+            "content_type": "text/plain",
+            "disposition": "attachment",
+            "size_bytes": 4,
+        }
+    ]
+    payload["attachment_payloads"] = [
+        {
+            **payload["attachments"][0],
+            "content": b"test",
+        }
+    ]
+    stored = db.store_message(payload)
+
+    detail = main.public_get_message(
+        stored["id"], alias="second@temp.darkambient.co", _session={}
+    )
+    attachment = main.public_download_message_attachment(
+        stored["id"], 0, alias="second@temp.darkambient.co", _session={}
+    )
+
+    assert detail["item"]["recipient_address"] == "second@temp.darkambient.co"
+    assert attachment.body == b"test"
+
+    for route in (
+        lambda: main.public_get_message(
+            stored["id"], alias="outside@temp.darkambient.co", _session={}
+        ),
+        lambda: main.public_download_message_attachment(
+            stored["id"], 0, alias="outside@temp.darkambient.co", _session={}
+        ),
+    ):
+        with pytest.raises(HTTPException) as error:
+            route()
+        assert error.value.status_code == 404
+
+
+def test_public_translation_uses_active_recipient_identity(monkeypatch, tmp_path):
+    _init_temp_db(monkeypatch, tmp_path)
+    stored = db.store_message(_message_payload(4))
+    captured = {}
+
+    def fake_translate(message, target_language):
+        captured.update(message)
+        return {"translated_text": "Xin chào", "target_language": target_language}
+
+    monkeypatch.setattr(main, "translate_message", fake_translate)
+
+    result = main.public_translate_email(
+        stored["id"],
+        alias="second@temp.darkambient.co",
+        payload={"target_language": "vi"},
+        _session={},
+    )
+
+    assert result["ok"] is True
+    assert captured["recipient_address"] == "second@temp.darkambient.co"
+
+    with pytest.raises(HTTPException) as error:
+        main.public_translate_email(
+            stored["id"],
+            alias="outside@temp.darkambient.co",
+            payload={"target_language": "vi"},
+            _session={},
+        )
+    assert error.value.status_code == 404
+
+
+def test_user_reader_keeps_active_alias_on_detail_actions():
+    user_js = (ROOT / "user.js").read_text(encoding="utf-8")
+
+    assert "state.currentAlias = payload.alias?.address" in user_js
+    assert "?alias=${encodeURIComponent(state.currentAlias)}" in user_js
+    assert "new URLSearchParams({ alias: state.currentAlias })" in user_js

@@ -546,3 +546,9 @@
 - Preserved: DarkAmbient branding, Aurora Teal UI, existing API compatibility, production data, isolated VPS stack and apex Google Workspace.
 - Affected files: docs/superpowers/specs/2026-09-07-upstream-mail-capability-sync-design.md, docs/DECISIONS_INDEX.md, docs/DECISIONS.md, docs/MEMORY_INDEX.md, docs/PROJECT_CONTEXT.md, docs/CHANGELOG.md.
 - Impact/Risk: documentation only; runtime behavior is unchanged until the implementation plan is approved and executed.
+
+### 2026-09-07 - integrate_upstream_mail_capabilities
+- Added: Multi-recipient inbox mapping, sender aliases, outgoing attachments, automatic forwarding with per-target retry, summary-list loading, and matching DarkAmbient admin controls.
+- Preserved: Aurora Teal branding, public alias isolation, existing SQLite/runtime data, apex Google Workspace and the isolated VPS deployment.
+- Affected files: backend mail parser/database/sync/mailer/API, admin UI, regression tests, mail capability docs and deploy runbook.
+- Impact/Risk: medium-high; schema migrations are additive and idempotent, while outbound and forwarding paths now perform additional SMTP work.
