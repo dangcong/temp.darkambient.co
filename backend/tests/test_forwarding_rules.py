@@ -1,3 +1,6 @@
+import inspect
+import sqlite3
+
 import pytest
 from fastapi import HTTPException
 
@@ -148,6 +151,39 @@ def test_source_alias_cannot_belong_to_two_rules(monkeypatch, tmp_path):
             "first@temp.darkambient.co",
             "replacement@gmail.com",
         )
+
+
+def test_forwarding_rule_writes_lock_before_checking_source_overlap():
+    create_source = inspect.getsource(db.create_forwarding_rule)
+    update_source = inspect.getsource(db.update_forwarding_rule)
+
+    assert create_source.index('conn.execute("BEGIN IMMEDIATE")') < create_source.index(
+        "existing_rows = conn.execute"
+    )
+    assert update_source.index('conn.execute("BEGIN IMMEDIATE")') < update_source.index(
+        "current = conn.execute"
+    )
+
+
+def test_forwarding_api_maps_concurrent_unique_conflict_to_409(monkeypatch):
+    monkeypatch.setattr(
+        db,
+        "create_forwarding_rule",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            sqlite3.IntegrityError("UNIQUE constraint failed")
+        ),
+    )
+
+    with pytest.raises(HTTPException) as error:
+        main.create_forwarding_rule(
+            {
+                "source_address": "first@temp.darkambient.co",
+                "target_address": "owner@gmail.com",
+            },
+            _session={"role": "admin"},
+        )
+
+    assert error.value.status_code == 409
 
 
 def test_init_db_backfills_legacy_delivery_targets_idempotently(monkeypatch, tmp_path):

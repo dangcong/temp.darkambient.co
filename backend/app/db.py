@@ -1336,6 +1336,7 @@ def create_forwarding_rule(source_addresses: Any, target_addresses: Any) -> dict
     target = ",".join(targets)
     now = utc_now_iso()
     with _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         existing_rows = conn.execute(
             "SELECT id, source_addresses_json, source_address FROM forwarding_rules"
         ).fetchall()
@@ -1348,16 +1349,19 @@ def create_forwarding_rule(source_addresses: Any, target_addresses: Any) -> dict
             )
             if existing_sources.intersection(source_set):
                 raise ValueError("Một alias đã thuộc quy tắc chuyển tiếp khác")
-        conn.execute(
-            """
-            INSERT INTO forwarding_rules(
-                source_address, target_address, source_addresses_json, target_addresses_json,
-                enabled, created_at, updated_at
+        try:
+            conn.execute(
+                """
+                INSERT INTO forwarding_rules(
+                    source_address, target_address, source_addresses_json, target_addresses_json,
+                    enabled, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, 1, ?, ?)
+                """,
+                (source, target, json.dumps(sources), json.dumps(targets), now, now),
             )
-            VALUES (?, ?, ?, ?, 1, ?, ?)
-            """,
-            (source, target, json.dumps(sources), json.dumps(targets), now, now),
-        )
+        except sqlite3.IntegrityError as error:
+            raise ValueError("Một alias đã thuộc quy tắc chuyển tiếp khác") from error
         row = conn.execute(
             "SELECT * FROM forwarding_rules WHERE source_address = ?", (source,)
         ).fetchone()
@@ -1372,6 +1376,7 @@ def update_forwarding_rule(
     target_addresses: Any | None = None,
 ) -> dict[str, Any] | None:
     with _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         current = conn.execute(
             "SELECT * FROM forwarding_rules WHERE id = ?", (rule_id,)
         ).fetchone()

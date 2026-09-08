@@ -490,6 +490,11 @@ def create_forwarding_rule(
         )
     try:
         item = db.create_forwarding_rule(source_addresses, target_addresses)
+    except sqlite3.IntegrityError as error:
+        raise HTTPException(
+            status_code=409,
+            detail="Một alias đã thuộc quy tắc chuyển tiếp khác",
+        ) from error
     except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     return {"item": item}
@@ -529,6 +534,11 @@ def update_forwarding_rule(
             source_addresses=source_addresses,
             target_addresses=target_addresses,
         )
+    except sqlite3.IntegrityError as error:
+        raise HTTPException(
+            status_code=409,
+            detail="Một alias đã thuộc quy tắc chuyển tiếp khác",
+        ) from error
     except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     if item is None:

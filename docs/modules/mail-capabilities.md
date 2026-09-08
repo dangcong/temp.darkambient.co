@@ -22,6 +22,7 @@
 ## Automatic forwarding
 - Admin CRUD: `GET/POST /api/forwarding-rules`, `PATCH/DELETE /api/forwarding-rules/{rule_id}`.
 - `forwarding_rules` stores source/target lists and enabled state.
+- Rule create/update takes an immediate SQLite write lock before checking source overlap, so concurrent admin requests cannot assign one alias to two rules.
 - `forwarding_deliveries` provides one idempotent parent job per `(rule_id, message_id)`.
 - `forwarding_delivery_targets` tracks status, attempts, error and next retry independently for every target.
 - A rule only enqueues messages stored after the rule is enabled. Disabling cancels pending/retrying work; deleting cascades delivery history.
