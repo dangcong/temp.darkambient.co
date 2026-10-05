@@ -181,7 +181,7 @@
 - Impact/Risk: low; browser may need a hard refresh to fetch the updated stylesheet.
 
 ### 2026-03-20 17:35 - publish_repo_to_github
-- Added: git publishing step for `D:\Lush-Temp-Mail` to the empty GitHub repository `shinemusicllc/Lush-Temp-Mail`.
+- Added: git publishing step for `D:\Lush-Temp-Mail` to the empty GitHub repository `Lush-Temp-Mail`.
 - Changed: local folder becomes the canonical git repo for future commits and pushes.
 - Fixed: project is no longer only a filesystem copy; future VPS updates can track GitHub properly.
 - Affected files: `docs/WORKLOG.md`, `docs/CHANGELOG.md`.
@@ -552,3 +552,9 @@
 - Preserved: Aurora Teal branding, public alias isolation, existing SQLite/runtime data, apex Google Workspace and the isolated VPS deployment.
 - Affected files: backend mail parser/database/sync/mailer/API, admin UI, regression tests, mail capability docs and deploy runbook.
 - Impact/Risk: medium-high; schema migrations are additive and idempotent, while outbound and forwarding paths now perform additional SMTP work.
+
+### 2026-10-05 - change_canonical_github_owner
+- Changed: canonical GitHub repository owner from the previous account to `dangcong`; local `origin/main`, project memory, deployment runbook, and active implementation references now point to `https://github.com/dangcong/temp.darkambient.co`.
+- Removed: all remaining references to the previous GitHub account name from tracked repository content.
+- Affected files: deploy/darkambient/README.md, docs/PROJECT_BRIEF.md, docs/MEMORY_INDEX.md, docs/PROJECT_CONTEXT.md, docs/DECISIONS_INDEX.md, docs/DECISIONS.md, docs/WORKLOG.md, docs/superpowers/plans/2026-09-07-upstream-mail-capability-sync-implementation.md, docs/superpowers/specs/2026-09-07-upstream-mail-capability-sync-design.md, docs/CHANGELOG.md.
+- Impact/Risk: documentation and Git routing only; application runtime and API behavior are unchanged.

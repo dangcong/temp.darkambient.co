@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Canonical local checkout: `C:\Users\Cong-PC\Dropbox\Tool-YTB\temp.darkambient.co`.
-- Canonical VPS checkout: `/opt/darkambient-temp-mail/app`; remote vận hành duy nhất là `origin` của `shinemusicllc/temp.darkambient.co`.
+- Canonical VPS checkout: `/opt/darkambient-temp-mail/app`; remote vận hành duy nhất là `origin` của `dangcong/temp.darkambient.co`.
 - Giữ FastAPI + SQLite + vanilla HTML/CSS/JS; không thêm ORM hoặc frontend bundler.
 - Giữ branding DarkAmbient và Aurora Teal: primary `#0f766e`, hover `#115e59`, surface `#f0fdfa`.
 - Giữ apex `darkambient.co` trên Google Workspace; không thay MX/DNS hoặc recreate Docker Mailserver/Rspamd.
@@ -549,7 +549,7 @@ git push origin main
 
 - [ ] **Step 4: Predeploy VPS checks và SQLite backup**
 
-Trên VPS, xác minh `/opt/darkambient-temp-mail/app` sạch, branch `main`, remote đúng `shinemusicllc/temp.darkambient.co`, ghi current commit và tạo backup nhất quán của runtime SQLite trước pull.
+Trên VPS, xác minh `/opt/darkambient-temp-mail/app` sạch, branch `main`, remote đúng `dangcong/temp.darkambient.co`, ghi current commit và tạo backup nhất quán của runtime SQLite trước pull.
 
 - [ ] **Step 5: Pull và rebuild riêng app**
 

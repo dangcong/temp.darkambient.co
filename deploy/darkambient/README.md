@@ -32,7 +32,7 @@ Tạo các record sau trong Cloudflare:
 
 ## Git checkout và cập nhật
 
-Repo vận hành chính thức là `https://github.com/shinemusicllc/temp.darkambient.co`. Cả local và VPS đều dùng branch `main` tracking `origin/main`; VPS checkout đặt tại `/opt/darkambient-temp-mail/app`. Runtime `.env`, credentials và `data/` luôn nằm trong các path đã ignore, nên `git pull` không được phép ghi đè chúng.
+Repo vận hành chính thức là `https://github.com/dangcong/temp.darkambient.co`. Cả local và VPS đều dùng branch `main` tracking `origin/main`; VPS checkout đặt tại `/opt/darkambient-temp-mail/app`. Runtime `.env`, credentials và `data/` luôn nằm trong các path đã ignore, nên `git pull` không được phép ghi đè chúng.
 
 Sau khi test và push từ local, cập nhật VPS bằng:
 

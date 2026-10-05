@@ -172,13 +172,13 @@
 
 ## 2026-03-20 17:35 - Publish repo to GitHub
 
-- Prepared the local folder `D:\Lush-Temp-Mail` to become the source git repository for `shinemusicllc/Lush-Temp-Mail`.
+- Prepared the local folder `D:\Lush-Temp-Mail` to become the source git repository for `Lush-Temp-Mail`.
 - Verified the target GitHub remote is empty and re-checked `.gitignore` so runtime-only files like `deploy/.env`, `deploy/LOCAL_PASSWORDS.md`, `.venv/`, and `data/` stay out of version control.
 - Proceeded to initialize git locally, commit the current application/deploy/docs state, and push it to GitHub.
 
 ## 2026-03-20 18:22 - Clone repo and run local app
 
-- Cloned `https://github.com/shinemusicllc/Lush-Temp-Mail` into `C:\Users\PC\Lush-Temp-Mail`.
+- Cloned the `Lush-Temp-Mail` repository into `C:\Users\PC\Lush-Temp-Mail`.
 - Read project rules/context from `AGENTS.md`, `docs/PROJECT_CONTEXT.md`, `docs/DECISIONS.md`, and `docs/WORKLOG.md` before local runtime setup.
 - Created local virtual environment at `.venv` and installed dependencies from `requirements.txt`.
 - Started the FastAPI app locally with `uvicorn backend.app.main:app --host 127.0.0.1 --port 8010`.

@@ -4,7 +4,7 @@
 
 - Ngày: 2026-09-07
 - Trạng thái: Đã duyệt thiết kế hội thoại, chờ duyệt bản spec được ghi vào repo
-- Repo đích: `shinemusicllc/temp.darkambient.co`
+- Repo đích: `dangcong/temp.darkambient.co`
 - Upstream tham khảo: `lushmediadev/Lush-Temp-Mail` tại commit `10e66c9`
 - Phương án được chọn: port chọn lọc theo capability
 
@@ -216,7 +216,7 @@ Trước production deploy, tạo backup SQLite nhất quán. Vì schema chỉ a
 
 1. Implement trên feature branch/worktree từ checkout canonical local.
 2. Chạy migration/test trên DB tạm hoặc bản sao production, không dùng production DB cho thử nghiệm.
-3. Merge vào `main`, push `origin/main` của `shinemusicllc/temp.darkambient.co`.
+3. Merge vào `main`, push `origin/main` của `dangcong/temp.darkambient.co`.
 4. Trên VPS `/opt/darkambient-temp-mail/app`, xác minh clean checkout và remote đúng repo này.
 5. Backup DB, pull fast-forward và chạy `deploy/darkambient/update.sh` để rebuild riêng app service.
 6. Xác minh health endpoint, login, inbox, send/reply/forward, forwarding worker và production UI.

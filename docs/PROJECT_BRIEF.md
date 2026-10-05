@@ -28,6 +28,6 @@
 - Do not require users to pre-create aliases before receiving mail; inbound mail must still auto-discover aliases.
 - Preserve UTF-8 Vietnamese UI text.
 - Keep UI changes close to the current DarkAmbient mail-workspace visual language and avoid broad layout rewrites.
-- Treat the public `temp.darkambient.co` repository as the only operational Git origin; local and VPS maintenance use its `main` branch.
+- Treat the public `https://github.com/dangcong/temp.darkambient.co` repository as the only operational Git origin; local and VPS maintenance use its `main` branch.
 - Never allow an automatic-forward target inside `@temp.darkambient.co`; this prevents forwarding loops.
 
